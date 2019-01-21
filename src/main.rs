@@ -4,6 +4,7 @@ extern crate serde_json;
 
 mod dominator;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fmt::Display;
@@ -17,40 +18,47 @@ struct Line {
     address: Option<String>,
     memsize: Option<usize>,
 
-    #[serde(rename = "type")]
-    object_type: String,
-    class: Option<String>,
-
-    name: Option<String>,
-
     #[serde(default)]
     references: Vec<String>,
+
+    #[serde(rename = "type")]
+    object_type: String,
+
+    class: Option<String>,
+    root: Option<String>,
+    name: Option<String>,
+    length: Option<usize>,
+    size: Option<usize>,
+    value: Option<String>,
 }
 
 #[derive(Debug)]
 enum Object {
     Root {
         references: Vec<usize>,
+        label: String,
     },
     Module {
         address: usize,
         references: Vec<usize>,
         memsize: usize,
+        kind: String,
         name: Option<String>,
-        object_type: String,
     },
     Instance {
         address: usize,
         references: Vec<usize>,
         memsize: usize,
         module: usize,
-        object_type: String,
+        kind: String,
+        label: String,
     },
     Other {
         address: usize,
         references: Vec<usize>,
         memsize: usize,
-        object_type: String,
+        kind: String,
+        label: String,
     },
 }
 
@@ -72,30 +80,70 @@ impl Line {
             .map(|r| Line::parse_address(r.as_str()))
             .collect();
         let memsize = self.memsize.unwrap_or(0);
-        let object_type = self.object_type;
+        let kind = self.object_type;
 
-        let result = match object_type.as_str() {
-            "ROOT" => Object::Root { references },
+        let result = match kind.as_str() {
+            "ROOT" => Object::Root {
+                references,
+                label: self.root.unwrap(),
+            },
             "CLASS" | "MODULE" | "ICLASS" => Object::Module {
                 address: address?,
                 references,
                 memsize,
+                kind,
                 name: self.name,
-                object_type,
             },
-            _ if self.class.is_some() => Object::Instance {
+            "ARRAY" => Object::Other {
                 address: address?,
                 references,
                 memsize,
-                module: Line::parse_address(self.class?.as_str()),
-                object_type,
+                kind,
+                label: format!("Array[len={}]", self.length?),
             },
-            _ => Object::Other {
+            "HASH" => Object::Other {
                 address: address?,
                 references,
                 memsize,
-                object_type,
+                kind,
+                label: format!("Hash[size={}]", self.size?),
             },
+            "STRING" => Object::Other {
+                address: address?,
+                references,
+                memsize,
+                kind,
+                label: if let Some(v) = self.value {
+                    if v.len() > 40 {
+                        format!("'{}...'", v.chars().take(37).collect::<String>())
+                    } else {
+                        v.to_owned()
+                    }
+                } else {
+                    "".to_string()
+                },
+            },
+            other => {
+                let label = format!("{}[{}]", other, address?);
+                if let Some(c) = self.class {
+                    Object::Instance {
+                        address: address?,
+                        references,
+                        memsize,
+                        module: Line::parse_address(c.as_str()),
+                        kind,
+                        label,
+                    }
+                } else {
+                    Object::Other {
+                        address: address?,
+                        references,
+                        memsize,
+                        kind,
+                        label,
+                    }
+                }
+            }
         };
 
         Some(result)
@@ -107,30 +155,12 @@ impl Line {
 }
 
 impl Object {
-    pub fn label(&self, objects_by_addr: &BTreeMap<usize, Object>) -> String {
-        format!("{}[{}]", self.kind(objects_by_addr), self.address())
-    }
-
-    pub fn kind<'a>(&'a self, objects_by_addr: &'a BTreeMap<usize, Object>) -> &'a str {
+    pub fn kind(&self) -> &str {
         match self {
             Object::Root { .. } => "ROOT",
-            Object::Module { object_type, .. } => object_type,
-            Object::Instance {
-                module,
-                object_type,
-                ..
-            } => objects_by_addr
-                .get(module)
-                .and_then(|m| m.name())
-                .unwrap_or(object_type),
-            Object::Other { object_type, .. } => object_type,
-        }
-    }
-
-    pub fn name(&self) -> Option<&str> {
-        match self {
-            Object::Module { name, .. } => name.as_ref().map(|n| n.as_str()),
-            _ => None,
+            Object::Module { kind, .. } => kind.as_str(),
+            Object::Instance { kind, .. } => kind.as_str(),
+            Object::Other { kind, .. } => kind.as_str(),
         }
     }
 
@@ -182,6 +212,29 @@ impl Hash for Object {
     }
 }
 
+impl Display for Object {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let label: Cow<str> = match self {
+            Object::Root { label, .. } => Cow::Borrowed(label.as_str()),
+            Object::Module {
+                name,
+                kind,
+                address,
+                ..
+            } => {
+                if let Some(n) = name {
+                    Cow::Borrowed(n.as_str())
+                } else {
+                    Cow::Owned(format!("{}[{}]", kind, address))
+                }
+            }
+            Object::Instance { label, .. } => Cow::Borrowed(label.as_str()),
+            Object::Other { label, .. } => Cow::Borrowed(label.as_str()),
+        };
+        write!(f, "{}", label)
+    }
+}
+
 impl Stats {
     pub fn add(&mut self, other: Stats) -> Stats {
         Stats {
@@ -210,22 +263,50 @@ fn parse(file: &str) -> std::io::Result<(Vec<Object>, BTreeMap<usize, Object>)> 
         }
     }
 
+    // TODO Is there a way to satisfy the borrow checker without this copying?
+    let module_names = {
+        let mut module_names: HashMap<usize, String> = HashMap::new();
+        for obj in objects_by_addr.values() {
+            if let Object::Module { address, name, .. } = obj {
+                if let Some(n) = name {
+                    module_names.insert(*address, n.to_string());
+                }
+            }
+        }
+        module_names
+    };
+
+    for obj in objects_by_addr.values_mut() {
+        if let Object::Instance {
+            module,
+            kind,
+            label,
+            address,
+            ..
+        } = obj
+        {
+            if let Some(name) = module_names.get(module) {
+                *kind = name.to_owned();
+                *label = format!("{}[{}]", name, address);
+            }
+        }
+    }
+
     Ok((roots, objects_by_addr))
 }
 
 fn print_basic_stats(objects_by_addr: &BTreeMap<usize, Object>) {
     let mut by_kind: HashMap<&str, Stats> = HashMap::new();
     for obj in objects_by_addr.values() {
-        let kind = obj.kind(objects_by_addr);
         by_kind
-            .entry(kind)
+            .entry(obj.kind())
             .and_modify(|c| *c = (*c).add(obj.stats()))
             .or_insert_with(|| obj.stats());
     }
     print_largest(&by_kind, 10);
 }
 
-fn print_largest_objects(roots: &[Object], objects_by_addr: &BTreeMap<usize, Object>) {
+fn print_dominators(roots: &[Object], objects_by_addr: &BTreeMap<usize, Object>) {
     let objects = {
         let mut objects: Vec<&Object> = Vec::new();
         objects.extend(roots.iter());
@@ -258,11 +339,11 @@ fn print_largest_objects(roots: &[Object], objects_by_addr: &BTreeMap<usize, Obj
 
     let tree = dominator::DominatorTree::from_graph(&adj_list);
 
-    let mut subtree_sizes: HashMap<String, Stats> = HashMap::new();
+    let mut subtree_sizes: HashMap<&Object, Stats> = HashMap::new();
 
     // Assign each node's stats to itself
     for obj in &objects {
-        subtree_sizes.insert(obj.label(objects_by_addr), obj.stats());
+        subtree_sizes.insert(obj, obj.stats());
     }
 
     // Assign each node's stats to all of its dominators
@@ -277,9 +358,8 @@ fn print_largest_objects(roots: &[Object], objects_by_addr: &BTreeMap<usize, Obj
                 i = dom - 1;
             }
 
-            let key = objects[i].label(objects_by_addr);
             subtree_sizes
-                .entry(key)
+                .entry(objects[i])
                 .and_modify(|e| *e = (*e).add(stats));
         }
     }
@@ -314,7 +394,9 @@ fn main() -> std::io::Result<()> {
 
     let (roots, objects_by_addr) = parse(&args[1])?;
     print_basic_stats(&objects_by_addr);
-    print_largest_objects(roots.as_slice(), &objects_by_addr);
+
+    println!("\nObjects retaining the most memory:");
+    print_dominators(roots.as_slice(), &objects_by_addr);
 
     Ok(())
 }
