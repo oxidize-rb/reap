@@ -1,11 +1,12 @@
 #[macro_use]
 extern crate serde;
+extern crate petgraph;
 extern crate serde_json;
 
-mod dominator;
-
-use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use petgraph::algo::dominators;
+use petgraph::graph::NodeIndex;
+use petgraph::{Directed, Graph};
+use std::collections::HashMap;
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
@@ -33,33 +34,19 @@ struct Line {
 }
 
 #[derive(Debug)]
-enum Object {
-    Root {
-        references: Vec<usize>,
-        label: String,
-    },
-    Module {
-        address: usize,
-        references: Vec<usize>,
-        memsize: usize,
-        kind: String,
-        name: Option<String>,
-    },
-    Instance {
-        address: usize,
-        references: Vec<usize>,
-        memsize: usize,
-        module: usize,
-        kind: String,
-        label: String,
-    },
-    Other {
-        address: usize,
-        references: Vec<usize>,
-        memsize: usize,
-        kind: String,
-        label: String,
-    },
+struct ParsedLine {
+    object: Object,
+    references: Vec<usize>,
+    module: Option<usize>,
+    name: Option<String>,
+}
+
+#[derive(Debug)]
+struct Object {
+    address: usize,
+    bytes: usize,
+    kind: String,
+    label: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -69,84 +56,46 @@ struct Stats {
 }
 
 impl Line {
-    pub fn parse(self) -> Option<Object> {
-        let address = self
-            .address
-            .as_ref()
-            .map(|a| Line::parse_address(a.as_str()));
-        let references = self
-            .references
-            .iter()
-            .map(|r| Line::parse_address(r.as_str()))
-            .collect();
-        let memsize = self.memsize.unwrap_or(0);
-        let kind = self.object_type;
-
-        let result = match kind.as_str() {
-            "ROOT" => Object::Root {
-                references,
-                label: self.root.unwrap(),
-            },
-            "CLASS" | "MODULE" | "ICLASS" => Object::Module {
-                address: address?,
-                references,
-                memsize,
-                kind,
-                name: self.name,
-            },
-            "ARRAY" => Object::Other {
-                address: address?,
-                references,
-                memsize,
-                kind,
-                label: format!("Array[len={}]", self.length?),
-            },
-            "HASH" => Object::Other {
-                address: address?,
-                references,
-                memsize,
-                kind,
-                label: format!("Hash[size={}]", self.size?),
-            },
-            "STRING" => Object::Other {
-                address: address?,
-                references,
-                memsize,
-                kind,
-                label: if let Some(v) = self.value {
-                    if v.len() > 40 {
-                        format!("'{}...'", v.chars().take(37).collect::<String>())
-                    } else {
-                        v.to_owned()
-                    }
-                } else {
-                    "".to_string()
-                },
-            },
-            other => {
-                let label = format!("{}[{}]", other, address?);
-                if let Some(c) = self.class {
-                    Object::Instance {
-                        address: address?,
-                        references,
-                        memsize,
-                        module: Line::parse_address(c.as_str()),
-                        kind,
-                        label,
-                    }
-                } else {
-                    Object::Other {
-                        address: address?,
-                        references,
-                        memsize,
-                        kind,
-                        label,
-                    }
-                }
-            }
+    pub fn parse(self) -> Option<ParsedLine> {
+        let mut object = Object {
+            address: self
+                .address
+                .as_ref()
+                .map(|a| Line::parse_address(a.as_str()))
+                .unwrap_or(0),
+            bytes: self.memsize.unwrap_or(0),
+            kind: self.object_type,
+            label: None,
         };
 
-        Some(result)
+        if object.address == 0 && object.kind != "ROOT" {
+            return None;
+        }
+
+        object.label = match object.kind.as_str() {
+            "CLASS" | "MODULE" | "ICLASS" => self.name.clone(),
+            "ARRAY" => Some(format!("Array[len={}]", self.length?)),
+            "HASH" => Some(format!("Hash[size={}]", self.size?)),
+            "STRING" => self.value.map(|v| {
+                if v.len() > 40 {
+                    format!("'{}...'", v.chars().take(37).collect::<String>())
+                } else {
+                    v.to_owned()
+                }
+            }),
+            _ => None,
+        };
+
+        Some(ParsedLine {
+            references: self
+                .references
+                .iter()
+                .map(|r| Line::parse_address(r.as_str()))
+                .collect(),
+            module: self.class.map(|c| Line::parse_address(c.as_str())),
+            name: self.name,
+            object,
+        })
     }
 
     fn parse_address(addr: &str) -> usize {
@@ -155,83 +104,47 @@ impl Line {
 }
 
 impl Object {
-    pub fn kind(&self) -> &str {
-        match self {
-            Object::Root { .. } => "ROOT",
-            Object::Module { kind, .. } => kind.as_str(),
-            Object::Instance { kind, .. } => kind.as_str(),
-            Object::Other { kind, .. } => kind.as_str(),
-        }
-    }
-
-    pub fn bytes(&self) -> usize {
-        match self {
-            Object::Root { .. } => 0,
-            Object::Module { memsize, .. } => *memsize,
-            Object::Instance { memsize, .. } => *memsize,
-            Object::Other { memsize, .. } => *memsize,
-        }
-    }
-
-    pub fn address(&self) -> usize {
-        match self {
-            Object::Root { .. } => 0,
-            Object::Module { address, .. } => *address,
-            Object::Instance { address, .. } => *address,
-            Object::Other { address, .. } => *address,
-        }
-    }
-
     pub fn stats(&self) -> Stats {
         Stats {
             count: 1,
-            bytes: self.bytes(),
+            bytes: self.bytes,
         }
     }
 
-    pub fn references(&self) -> &[usize] {
-        match self {
-            Object::Root { references, .. } => &references,
-            Object::Module { references, .. } => &references,
-            Object::Instance { references, .. } => &references,
-            Object::Other { references, .. } => &references,
+    pub fn root() -> Object {
+        Object {
+            address: 0,
+            bytes: 0,
+            kind: "ROOT".to_string(),
+            label: Some("root".to_string()),
         }
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.address == 0
     }
 }
 
 impl PartialEq for Object {
     fn eq(&self, other: &Object) -> bool {
-        self.address() == other.address()
+        self.address == other.address
     }
 }
 impl Eq for Object {}
 
 impl Hash for Object {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.address().hash(state);
+        self.address.hash(state);
     }
 }
 
 impl Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let label: Cow<str> = match self {
-            Object::Root { label, .. } => Cow::Borrowed(label.as_str()),
-            Object::Module {
-                name,
-                kind,
-                address,
-                ..
-            } => {
-                if let Some(n) = name {
-                    Cow::Borrowed(n.as_str())
-                } else {
-                    Cow::Owned(format!("{}[{}]", kind, address))
-                }
-            }
-            Object::Instance { label, .. } => Cow::Borrowed(label.as_str()),
-            Object::Other { label, .. } => Cow::Borrowed(label.as_str()),
-        };
-        write!(f, "{}", label)
+        if let Some(ref label) = self.label {
+            write!(f, "{}", label)
+        } else {
+            write!(f, "{}[{}]", self.kind, self.address)
+        }
     }
 }
 
@@ -244,122 +157,102 @@ impl Stats {
     }
 }
 
-fn parse(file: &str) -> std::io::Result<(Vec<Object>, BTreeMap<usize, Object>)> {
+type ReferenceGraph = Graph<Object, (), Directed, usize>;
+
+fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
 
-    let mut objects_by_addr: BTreeMap<usize, Object> = BTreeMap::new();
-    let mut roots: Vec<Object> = Vec::new();
+    let mut graph: ReferenceGraph = Graph::default();
+    let mut indices: HashMap<usize, NodeIndex<usize>> = HashMap::new();
+    let mut references: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut instances: HashMap<usize, usize> = HashMap::new();
+    let mut names: HashMap<usize, String> = HashMap::new();
+
+    let root = Object::root();
+    let root_address = root.address;
+    let root_index = graph.add_node(root);
+    indices.insert(root_address, root_index);
+    references.insert(root_address, Vec::new());
 
     for line in reader.lines().map(|l| l.unwrap()) {
-        let obj = serde_json::from_str::<Line>(&line)
+        let parsed = serde_json::from_str::<Line>(&line)
             .expect(&line)
             .parse()
             .expect(&line);
-        if obj.address() > 0 {
-            objects_by_addr.insert(obj.address(), obj);
+
+        if parsed.object.is_root() {
+            let refs = references.get_mut(&root_address).unwrap();
+            refs.extend_from_slice(parsed.references.as_slice());
         } else {
-            roots.push(obj);
-        }
-    }
+            let address = parsed.object.address;
+            indices.insert(address, graph.add_node(parsed.object));
 
-    // TODO Is there a way to satisfy the borrow checker without this copying?
-    let module_names = {
-        let mut module_names: HashMap<usize, String> = HashMap::new();
-        for obj in objects_by_addr.values() {
-            if let Object::Module { address, name, .. } = obj {
-                if let Some(n) = name {
-                    module_names.insert(*address, n.to_string());
-                }
+            if !parsed.references.is_empty() {
+                references.insert(address, parsed.references);
             }
-        }
-        module_names
-    };
-
-    for obj in objects_by_addr.values_mut() {
-        if let Object::Instance {
-            module,
-            kind,
-            label,
-            address,
-            ..
-        } = obj
-        {
-            if let Some(name) = module_names.get(module) {
-                *kind = name.to_owned();
-                *label = format!("{}[{}]", name, address);
+            if let Some(module) = parsed.module {
+                instances.insert(address, module);
+            }
+            if let Some(name) = parsed.name {
+                names.insert(address, name);
             }
         }
     }
 
-    Ok((roots, objects_by_addr))
+    for (node, successors) in references {
+        let i = &indices[&node];
+        for s in successors {
+            if let Some(j) = indices.get(&s) {
+                graph.add_edge(*i, *j, ());
+            }
+        }
+    }
+
+    for mut obj in graph.node_weights_mut() {
+        if let Some(module) = instances.get(&obj.address) {
+            if let Some(name) = names.get(module) {
+                obj.kind = name.to_owned();
+            }
+        }
+    }
+
+    Ok((root_index, graph))
 }
 
-fn print_basic_stats(objects_by_addr: &BTreeMap<usize, Object>) {
+fn print_basic_stats(graph: &ReferenceGraph) {
     let mut by_kind: HashMap<&str, Stats> = HashMap::new();
-    for obj in objects_by_addr.values() {
+    for i in graph.node_indices() {
+        let obj = graph.node_weight(i).unwrap();
         by_kind
-            .entry(obj.kind())
+            .entry(&obj.kind)
             .and_modify(|c| *c = (*c).add(obj.stats()))
             .or_insert_with(|| obj.stats());
     }
     print_largest(&by_kind, 10);
 }
 
-fn print_dominators(roots: &[Object], objects_by_addr: &BTreeMap<usize, Object>) {
-    let objects = {
-        let mut objects: Vec<&Object> = Vec::new();
-        objects.extend(roots.iter());
-        objects.extend(objects_by_addr.values());
-        objects
-    };
-
-    let index_by_obj = {
-        let mut index_by_obj: HashMap<&Object, usize> = HashMap::with_capacity(objects.len());
-        for (i, obj) in objects.iter().enumerate() {
-            index_by_obj.insert(obj, i + 1);
-        }
-        index_by_obj
-    };
-
-    let adj_list = {
-        let mut adj_list: Vec<Vec<usize>> = objects
-            .iter()
-            .map(|obj| {
-                obj.references()
-                    .iter()
-                    .flat_map(|r| objects_by_addr.get(r).and_then(|o| index_by_obj.get(o)))
-                    .cloned()
-                    .collect()
-            })
-            .collect();
-        adj_list.insert(0, (1..=roots.len()).collect());
-        adj_list
-    };
-
-    let tree = dominator::DominatorTree::from_graph(&adj_list);
+fn print_dominators(root: NodeIndex<usize>, graph: &ReferenceGraph) {
+    let tree = dominators::simple_fast(graph, root);
 
     let mut subtree_sizes: HashMap<&Object, Stats> = HashMap::new();
 
     // Assign each node's stats to itself
-    for obj in &objects {
+    for i in graph.node_indices() {
+        let obj = graph.node_weight(i).unwrap();
         subtree_sizes.insert(obj, obj.stats());
     }
 
     // Assign each node's stats to all of its dominators
-    for (mut i, obj) in objects.iter().enumerate() {
+    for mut i in graph.node_indices() {
+        let obj = graph.node_weight(i).unwrap();
         let stats = obj.stats();
 
-        // Correct for artificial root-of-roots
-        while let Some(dom) = tree.idom(i + 1) {
-            if dom == 0 {
-                break;
-            } else {
-                i = dom - 1;
-            }
+        while let Some(dom) = tree.immediate_dominator(i) {
+            i = dom;
 
             subtree_sizes
-                .entry(objects[i])
+                .entry(graph.node_weight(i).unwrap())
                 .and_modify(|e| *e = (*e).add(stats));
         }
     }
@@ -392,11 +285,11 @@ fn main() -> std::io::Result<()> {
         args
     );
 
-    let (roots, objects_by_addr) = parse(&args[1])?;
-    print_basic_stats(&objects_by_addr);
+    let (root, graph) = parse(&args[1])?;
+    print_basic_stats(&graph);
 
     println!("\nObjects retaining the most memory:");
-    print_dominators(roots.as_slice(), &objects_by_addr);
+    print_dominators(root, &graph);
 
     Ok(())
 }
