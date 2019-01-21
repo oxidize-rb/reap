@@ -73,7 +73,9 @@ impl Line {
         }
 
         object.label = match object.kind.as_str() {
-            "CLASS" | "MODULE" | "ICLASS" => self.name.clone(),
+            "CLASS" | "MODULE" | "ICLASS" => {
+                self.name.clone().map(|n| format!("{}[{}]", n, object.kind))
+            }
             "ARRAY" => Some(format!("Array[len={}]", self.length?)),
             "HASH" => Some(format!("Hash[size={}]", self.size?)),
             "STRING" => self.value.map(|v| {
