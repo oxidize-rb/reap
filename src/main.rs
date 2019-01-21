@@ -2,10 +2,13 @@
 extern crate serde;
 extern crate serde_json;
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+mod dominator;
+
+use std::collections::{BTreeMap, HashMap};
 use std::env;
+use std::fmt::Display;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::prelude::*;
 use std::io::BufReader;
 
@@ -52,7 +55,7 @@ enum Object {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct Contents {
+struct Stats {
     count: usize,
     bytes: usize,
 }
@@ -104,6 +107,10 @@ impl Line {
 }
 
 impl Object {
+    pub fn label(&self, objects_by_addr: &BTreeMap<usize, Object>) -> String {
+        format!("{}[{}]", self.kind(objects_by_addr), self.address())
+    }
+
     pub fn kind<'a>(&'a self, objects_by_addr: &'a BTreeMap<usize, Object>) -> &'a str {
         match self {
             Object::Root { .. } => "ROOT",
@@ -145,18 +152,42 @@ impl Object {
         }
     }
 
-    pub fn stats(&self) -> Contents {
-        Contents {
+    pub fn stats(&self) -> Stats {
+        Stats {
             count: 1,
             bytes: self.bytes(),
         }
     }
+
+    pub fn references(&self) -> &[usize] {
+        match self {
+            Object::Root { references, .. } => &references,
+            Object::Module { references, .. } => &references,
+            Object::Instance { references, .. } => &references,
+            Object::Other { references, .. } => &references,
+        }
+    }
 }
 
-impl Contents {
-    pub fn add(&mut self, other: &Contents) {
-        self.count += other.count;
-        self.bytes += other.bytes;
+impl PartialEq for Object {
+    fn eq(&self, other: &Object) -> bool {
+        self.address() == other.address()
+    }
+}
+impl Eq for Object {}
+
+impl Hash for Object {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.address().hash(state);
+    }
+}
+
+impl Stats {
+    pub fn add(&mut self, other: Stats) -> Stats {
+        Stats {
+            count: self.count + other.count,
+            bytes: self.bytes + other.bytes,
+        }
     }
 }
 
@@ -182,6 +213,97 @@ fn parse(file: &str) -> std::io::Result<(Vec<Object>, BTreeMap<usize, Object>)> 
     Ok((roots, objects_by_addr))
 }
 
+fn print_basic_stats(objects_by_addr: &BTreeMap<usize, Object>) {
+    let mut by_kind: HashMap<&str, Stats> = HashMap::new();
+    for obj in objects_by_addr.values() {
+        let kind = obj.kind(objects_by_addr);
+        by_kind
+            .entry(kind)
+            .and_modify(|c| *c = (*c).add(obj.stats()))
+            .or_insert_with(|| obj.stats());
+    }
+    print_largest(&by_kind, 10);
+}
+
+fn print_largest_objects(roots: &[Object], objects_by_addr: &BTreeMap<usize, Object>) {
+    let objects = {
+        let mut objects: Vec<&Object> = Vec::new();
+        objects.extend(roots.iter());
+        objects.extend(objects_by_addr.values());
+        objects
+    };
+
+    let index_by_obj = {
+        let mut index_by_obj: HashMap<&Object, usize> = HashMap::with_capacity(objects.len());
+        for (i, obj) in objects.iter().enumerate() {
+            index_by_obj.insert(obj, i + 1);
+        }
+        index_by_obj
+    };
+
+    let adj_list = {
+        let mut adj_list: Vec<Vec<usize>> = objects
+            .iter()
+            .map(|obj| {
+                obj.references()
+                    .iter()
+                    .flat_map(|r| objects_by_addr.get(r).and_then(|o| index_by_obj.get(o)))
+                    .cloned()
+                    .collect()
+            })
+            .collect();
+        adj_list.insert(0, (1..=roots.len()).collect());
+        adj_list
+    };
+
+    let tree = dominator::DominatorTree::from_graph(&adj_list);
+
+    let mut subtree_sizes: HashMap<String, Stats> = HashMap::new();
+
+    // Assign each node's stats to itself
+    for obj in &objects {
+        subtree_sizes.insert(obj.label(objects_by_addr), obj.stats());
+    }
+
+    // Assign each node's stats to all of its dominators
+    for (mut i, obj) in objects.iter().enumerate() {
+        let stats = obj.stats();
+
+        // Correct for artificial root-of-roots
+        while let Some(dom) = tree.idom(i + 1) {
+            if dom == 0 {
+                break;
+            } else {
+                i = dom - 1;
+            }
+
+            let key = objects[i].label(objects_by_addr);
+            subtree_sizes
+                .entry(key)
+                .and_modify(|e| *e = (*e).add(stats));
+        }
+    }
+
+    print_largest(&subtree_sizes, 25);
+}
+
+fn print_largest<K: Display + Eq + Hash>(map: &HashMap<K, Stats>, count: usize) {
+    let sorted = {
+        let mut vec: Vec<(&K, &Stats)> = map.iter().collect();
+        vec.sort_unstable_by_key(|(_, c)| c.bytes);
+        vec
+    };
+    for (k, stats) in sorted.iter().rev().take(count) {
+        println!("{}: {} bytes ({} objects)", k, stats.bytes, stats.count);
+    }
+    let rest = sorted
+        .iter()
+        .rev()
+        .skip(count)
+        .fold(Stats::default(), |mut acc, (_, c)| acc.add(**c));
+    println!("...: {} bytes ({} objects)", rest.bytes, rest.count);
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     assert!(
@@ -191,35 +313,8 @@ fn main() -> std::io::Result<()> {
     );
 
     let (roots, objects_by_addr) = parse(&args[1])?;
-
-    let mut by_kind: HashMap<&str, Contents, _> = HashMap::new();
-    for obj in objects_by_addr.values() {
-        let kind = obj.kind(&objects_by_addr);
-        by_kind
-            .entry(kind)
-            .and_modify(|c| (*c).add(&obj.stats()))
-            .or_insert_with(|| obj.stats());
-    }
-    let sorted = {
-        let mut vec: Vec<(&&str, &Contents)> = by_kind.iter().collect();
-        vec.sort_unstable_by_key(|(_, c)| c.bytes);
-        vec
-    };
-    for (kind, contents) in sorted.iter().rev().take(10) {
-        println!(
-            "{}: {} bytes ({} objects)",
-            kind, contents.bytes, contents.count
-        );
-    }
-    let rest = sorted
-        .iter()
-        .rev()
-        .skip(10)
-        .fold(Contents::default(), |mut acc, (_, c)| {
-            acc.add(c);
-            acc
-        });
-    println!("...: {} bytes ({} objects)", rest.bytes, rest.count);
+    print_basic_stats(&objects_by_addr);
+    print_largest_objects(roots.as_slice(), &objects_by_addr);
 
     Ok(())
 }
