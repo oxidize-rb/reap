@@ -7,7 +7,7 @@ use petgraph::algo::dominators;
 use petgraph::dot;
 use petgraph::graph::NodeIndex;
 use petgraph::{Directed, Graph};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
@@ -289,6 +289,13 @@ fn dominator_subgraph<'a>(
     dgraph.retain_nodes(|g, n| {
         let obj = g.node_weight(n).unwrap();
         subtree_sizes[obj].bytes >= threshold_bytes
+    });
+
+    // It's not clear to me why removing nodes per above leaves us with duplicate edges
+    let mut seen: HashSet<(NodeIndex<usize>, NodeIndex<usize>)> = HashSet::new();
+    dgraph.retain_edges(|g, e| {
+        let (v, w) = g.edge_endpoints(e).unwrap();
+        seen.insert((v, w))
     });
 
     for mut obj in dgraph.node_weights_mut() {
