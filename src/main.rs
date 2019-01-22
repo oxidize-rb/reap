@@ -274,31 +274,31 @@ fn dominator_subtree_sizes(
     subtree_sizes
 }
 
-fn dominator_subgraph<'a>(
+fn relevant_subgraph<'a>(
     root: NodeIndex<usize>,
     graph: &'a ReferenceGraph,
-    subtree_sizes: HashMap<&'a Object, Stats>,
+    subtree_sizes: &HashMap<&'a Object, Stats>,
     relevance_threshold: f64,
 ) -> ReferenceGraph {
-    let mut dgraph: ReferenceGraph = graph.clone();
+    let mut subgraph: ReferenceGraph = graph.clone();
 
     let threshold_bytes = (subtree_sizes[graph.node_weight(root).unwrap()].bytes as f64
         * relevance_threshold)
         .floor() as usize;
 
-    dgraph.retain_nodes(|g, n| {
+    subgraph.retain_nodes(|g, n| {
         let obj = g.node_weight(n).unwrap();
         subtree_sizes[obj].bytes >= threshold_bytes
     });
 
     // It's not clear to me why removing nodes per above leaves us with duplicate edges
     let mut seen: HashSet<(NodeIndex<usize>, NodeIndex<usize>)> = HashSet::new();
-    dgraph.retain_edges(|g, e| {
+    subgraph.retain_edges(|g, e| {
         let (v, w) = g.edge_endpoints(e).unwrap();
         seen.insert((v, w))
     });
 
-    for mut obj in dgraph.node_weights_mut() {
+    for mut obj in subgraph.node_weights_mut() {
         let Stats { count, bytes } = subtree_sizes[obj];
         obj.label = Some(format!(
             "{}: {}b self, {}b refs, {} objects",
@@ -309,26 +309,15 @@ fn dominator_subgraph<'a>(
         ));
     }
 
-    dgraph
+    subgraph
 }
 
-fn print_basic_stats(graph: &ReferenceGraph) {
-    let by_kind = stats_by_kind(graph);
-    print_largest(&by_kind, 10);
-}
-
-fn print_dominators(root: NodeIndex<usize>, graph: &ReferenceGraph) -> std::io::Result<()> {
-    let subtree_sizes = dominator_subtree_sizes(root, graph);
-
-    print_largest(&subtree_sizes, 25);
-
-    let dgraph = dominator_subgraph(root, graph, subtree_sizes, 0.005);
-
-    let mut file = File::create("out.dot")?;
+fn write_dot_file(graph: &ReferenceGraph, filename: &str) -> std::io::Result<()> {
+    let mut file = File::create(filename)?;
     write!(
         file,
         "{}",
-        dot::Dot::with_config(&dgraph, &[dot::Config::EdgeNoLabel])
+        dot::Dot::with_config(&graph, &[dot::Config::EdgeNoLabel])
     )?;
     Ok(())
 }
@@ -359,10 +348,15 @@ fn main() -> std::io::Result<()> {
     );
 
     let (root, graph) = parse(&args[1])?;
-    print_basic_stats(&graph);
+    let by_kind = stats_by_kind(&graph);
+    print_largest(&by_kind, 10);
 
+    let subtree_sizes = dominator_subtree_sizes(root, &graph);
     println!("\nObjects retaining the most memory:");
-    print_dominators(root, &graph)?;
+    print_largest(&subtree_sizes, 25);
+
+    let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, 0.005);
+    write_dot_file(&dom_graph, "out.dot")?;
 
     Ok(())
 }
