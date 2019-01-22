@@ -296,7 +296,7 @@ fn relevant_subgraph<'a>(
     let mut seen: HashSet<(NodeIndex<usize>, NodeIndex<usize>)> = HashSet::new();
     subgraph.retain_edges(|g, e| {
         let (v, w) = g.edge_endpoints(e).unwrap();
-        seen.insert((v, w))
+        v != w && seen.insert((v, w))
     });
 
     for mut obj in subgraph.node_weights_mut() {
@@ -346,12 +346,14 @@ fn main() -> std::io::Result<()> {
         (about: "A tool for parsing Ruby heap dumps.")
         (@arg INPUT: +required "Path to JSON heap dump file")
         (@arg DOT: -d --dot +takes_value "Dot file output")
+        (@arg THRESHOLD: -t --threshold +takes_value "Include nodes retaining at least this fraction of memory in dot output (defaults to 0.005)")
     )
     .get_matches();
 
     let input = args.value_of("INPUT").unwrap();
     let (root, graph) = parse(&input)?;
     let by_kind = stats_by_kind(&graph);
+    println!("Object types using the most memory:");
     print_largest(&by_kind, 10);
 
     let subtree_sizes = dominator_subtree_sizes(root, &graph);
@@ -359,7 +361,11 @@ fn main() -> std::io::Result<()> {
     print_largest(&subtree_sizes, 25);
 
     if let Some(output) = args.value_of("DOT") {
-        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, 0.005);
+        let threshold: f64 = args
+            .value_of("THRESHOLD")
+            .map(|t| t.parse().unwrap())
+            .unwrap_or(0.005);
+        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, threshold);
         write_dot_file(&dom_graph, &output)?;
     }
 

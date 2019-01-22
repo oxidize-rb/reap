@@ -2,6 +2,10 @@
 
 A tool for parsing Ruby heap dumps.
 
+Builds a dominator tree from reference graph showing which objects are holding on to large quantities of memory.
+
+Optional graphical output.
+
 # Use 
 
 Just pass the heap dump as the first argument.
@@ -10,10 +14,10 @@ For example, if `/tmp/heap.json` is a heap dump produced by `ObjectSpace.dump_al
 you can run the following from the root of this repository:
 
 ```sh
-RUSTFLAGS='-C target-cpu=native' cargo run --release /tmp/heap.json
+cargo run --release -- /tmp/heap.json -d out.dot
 ```
 
-(`target-cpu=native` isn't necessary, but might help performance.)
+Run with `--help` for full options.
 
 # Getting a heap dump
 
