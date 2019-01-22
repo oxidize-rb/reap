@@ -57,6 +57,8 @@ struct Stats {
     bytes: usize,
 }
 
+const DEFAULT_RELEVANCE_THRESHOLD: f64 = 0.005;
+
 impl Line {
     pub fn parse(self) -> Option<ParsedLine> {
         let mut object = Object {
@@ -364,10 +366,36 @@ fn main() -> std::io::Result<()> {
         let threshold: f64 = args
             .value_of("THRESHOLD")
             .map(|t| t.parse().unwrap())
-            .unwrap_or(0.005);
+            .unwrap_or(DEFAULT_RELEVANCE_THRESHOLD);
         let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, threshold);
         write_dot_file(&dom_graph, &output)?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn integration() {
+        let (root, graph) = parse("test/heap.json").unwrap();
+
+        assert_eq!(18982, graph.node_count());
+        assert_eq!(28436, graph.edge_count());
+
+        let by_kind = stats_by_kind(&graph);
+        assert_eq!(10409, by_kind["String"].count);
+        assert_eq!(544382, by_kind["String"].bytes);
+
+        let subtree_sizes = dominator_subtree_sizes(root, &graph);
+        let root_obj = graph.node_weight(root).unwrap();
+        assert_eq!(15472, subtree_sizes[root_obj].count);
+        assert_eq!(3439119, subtree_sizes[root_obj].bytes);
+
+        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, DEFAULT_RELEVANCE_THRESHOLD);
+        assert_eq!(33, dom_graph.node_count());
+        assert_eq!(37, dom_graph.edge_count());
+    }
 }
