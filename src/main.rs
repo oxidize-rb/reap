@@ -1,4 +1,6 @@
 #[macro_use]
+extern crate clap;
+#[macro_use]
 extern crate serde;
 extern crate petgraph;
 extern crate serde_json;
@@ -8,7 +10,6 @@ use petgraph::dot;
 use petgraph::graph::NodeIndex;
 use petgraph::{Directed, Graph};
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fmt::Display;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
@@ -340,14 +341,16 @@ fn print_largest<K: Display + Eq + Hash>(map: &HashMap<K, Stats>, count: usize) 
 }
 
 fn main() -> std::io::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    assert!(
-        args.len() == 2,
-        "Expected exactly one argument (filename), got {:?}",
-        args
-    );
+    let args = clap_app!(reap =>
+        (version: "0.1")
+        (about: "A tool for parsing Ruby heap dumps.")
+        (@arg INPUT: +required "Path to JSON heap dump file")
+        (@arg DOT: -d --dot +takes_value "Dot file output")
+    )
+    .get_matches();
 
-    let (root, graph) = parse(&args[1])?;
+    let input = args.value_of("INPUT").unwrap();
+    let (root, graph) = parse(&input)?;
     let by_kind = stats_by_kind(&graph);
     print_largest(&by_kind, 10);
 
@@ -355,8 +358,10 @@ fn main() -> std::io::Result<()> {
     println!("\nObjects retaining the most memory:");
     print_largest(&subtree_sizes, 25);
 
-    let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, 0.005);
-    write_dot_file(&dom_graph, "out.dot")?;
+    if let Some(output) = args.value_of("DOT") {
+        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, 0.005);
+        write_dot_file(&dom_graph, &output)?;
+    }
 
     Ok(())
 }
