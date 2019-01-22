@@ -4,6 +4,7 @@ extern crate petgraph;
 extern crate serde_json;
 
 use petgraph::algo::dominators;
+use petgraph::dot;
 use petgraph::graph::NodeIndex;
 use petgraph::{Directed, Graph};
 use std::collections::HashMap;
@@ -41,7 +42,7 @@ struct ParsedLine {
     name: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Object {
     address: usize,
     bytes: usize,
@@ -79,11 +80,19 @@ impl Line {
             "ARRAY" => Some(format!("Array[len={}]", self.length?)),
             "HASH" => Some(format!("Hash[size={}]", self.size?)),
             "STRING" => self.value.map(|v| {
-                if v.len() > 40 {
-                    format!("'{}...'", v.chars().take(37).collect::<String>())
-                } else {
-                    v.to_owned()
-                }
+                v.chars()
+                    .take(40)
+                    .flat_map(|c| {
+                        // Hacky escape to prevent dot format from breaking
+                        if c.is_control() {
+                            None
+                        } else if c == '\\' {
+                            Some('﹨')
+                        } else {
+                            Some(c)
+                        }
+                    })
+                    .collect::<String>()
             }),
             _ => None,
         };
@@ -159,7 +168,7 @@ impl Stats {
     }
 }
 
-type ReferenceGraph = Graph<Object, (), Directed, usize>;
+type ReferenceGraph = Graph<Object, &'static str, Directed, usize>;
 
 fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
@@ -206,7 +215,7 @@ fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
         let i = &indices[&node];
         for s in successors {
             if let Some(j) = indices.get(&s) {
-                graph.add_edge(*i, *j, ());
+                graph.add_edge(*i, *j, "");
             }
         }
     }
@@ -222,7 +231,7 @@ fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     Ok((root_index, graph))
 }
 
-fn print_basic_stats(graph: &ReferenceGraph) {
+fn stats_by_kind(graph: &ReferenceGraph) -> HashMap<&str, Stats> {
     let mut by_kind: HashMap<&str, Stats> = HashMap::new();
     for i in graph.node_indices() {
         let obj = graph.node_weight(i).unwrap();
@@ -231,10 +240,13 @@ fn print_basic_stats(graph: &ReferenceGraph) {
             .and_modify(|c| *c = (*c).add(obj.stats()))
             .or_insert_with(|| obj.stats());
     }
-    print_largest(&by_kind, 10);
+    by_kind
 }
 
-fn print_dominators(root: NodeIndex<usize>, graph: &ReferenceGraph) {
+fn dominator_subtree_sizes(
+    root: NodeIndex<usize>,
+    graph: &ReferenceGraph,
+) -> HashMap<&Object, Stats> {
     let tree = dominators::simple_fast(graph, root);
 
     let mut subtree_sizes: HashMap<&Object, Stats> = HashMap::new();
@@ -259,7 +271,59 @@ fn print_dominators(root: NodeIndex<usize>, graph: &ReferenceGraph) {
         }
     }
 
+    subtree_sizes
+}
+
+fn dominator_subgraph<'a>(
+    root: NodeIndex<usize>,
+    graph: &'a ReferenceGraph,
+    subtree_sizes: HashMap<&'a Object, Stats>,
+    relevance_threshold: f64,
+) -> ReferenceGraph {
+    let mut dgraph: ReferenceGraph = graph.clone();
+
+    let threshold_bytes = (subtree_sizes[graph.node_weight(root).unwrap()].bytes as f64
+        * relevance_threshold)
+        .floor() as usize;
+
+    dgraph.retain_nodes(|g, n| {
+        let obj = g.node_weight(n).unwrap();
+        subtree_sizes[obj].bytes >= threshold_bytes
+    });
+
+    for mut obj in dgraph.node_weights_mut() {
+        let Stats { count, bytes } = subtree_sizes[obj];
+        obj.label = Some(format!(
+            "{}: {}b self, {}b refs, {} objects",
+            obj,
+            obj.bytes,
+            bytes - obj.bytes,
+            count
+        ));
+    }
+
+    dgraph
+}
+
+fn print_basic_stats(graph: &ReferenceGraph) {
+    let by_kind = stats_by_kind(graph);
+    print_largest(&by_kind, 10);
+}
+
+fn print_dominators(root: NodeIndex<usize>, graph: &ReferenceGraph) -> std::io::Result<()> {
+    let subtree_sizes = dominator_subtree_sizes(root, graph);
+
     print_largest(&subtree_sizes, 25);
+
+    let dgraph = dominator_subgraph(root, graph, subtree_sizes, 0.005);
+
+    let mut file = File::create("out.dot")?;
+    write!(
+        file,
+        "{}",
+        dot::Dot::with_config(&dgraph, &[dot::Config::EdgeNoLabel])
+    )?;
+    Ok(())
 }
 
 fn print_largest<K: Display + Eq + Hash>(map: &HashMap<K, Stats>, count: usize) {
@@ -291,7 +355,7 @@ fn main() -> std::io::Result<()> {
     print_basic_stats(&graph);
 
     println!("\nObjects retaining the most memory:");
-    print_dominators(root, &graph);
+    print_dominators(root, &graph)?;
 
     Ok(())
 }
