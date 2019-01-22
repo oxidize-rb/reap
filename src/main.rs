@@ -65,7 +65,7 @@ impl Line {
             address: self
                 .address
                 .as_ref()
-                .map(|a| Line::parse_address(a.as_str()))
+                .and_then(|a| Line::parse_address(a.as_str()).ok())
                 .unwrap_or(0),
             bytes: self.memsize.unwrap_or(0),
             kind: self.object_type,
@@ -77,13 +77,18 @@ impl Line {
         }
 
         object.label = match object.kind.as_str() {
-            "CLASS" | "MODULE" | "ICLASS" => {
-                self.name.clone().map(|n| format!("{}[{}]", n, object.kind))
-            }
-            "ARRAY" => Some(format!("Array[len={}]", self.length?)),
-            "HASH" => Some(format!("Hash[size={}]", self.size?)),
+            "CLASS" | "MODULE" | "ICLASS" => self
+                .name
+                .clone()
+                .map(|n| format!("{}[{:#x}][{}]", n, object.address, object.kind)),
+            "ARRAY" => Some(format!(
+                "Array[{:#x}][len={}]",
+                object.address, self.length?
+            )),
+            "HASH" => Some(format!("Hash[{:#x}][size={}]", object.address, self.size?)),
             "STRING" => self.value.map(|v| {
-                v.chars()
+                let prefix = v
+                    .chars()
                     .take(40)
                     .flat_map(|c| {
                         // Hacky escape to prevent dot format from breaking
@@ -95,7 +100,13 @@ impl Line {
                             Some(c)
                         }
                     })
-                    .collect::<String>()
+                    .collect::<String>();
+                let ellipsis = if v.chars().nth(41).is_some() {
+                    "…"
+                } else {
+                    ""
+                };
+                format!("String[{:#x}][{}{}]", object.address, prefix, ellipsis)
             }),
             _ => None,
         };
@@ -104,16 +115,18 @@ impl Line {
             references: self
                 .references
                 .iter()
-                .map(|r| Line::parse_address(r.as_str()))
+                .flat_map(|r| Line::parse_address(r.as_str()).ok())
                 .collect(),
-            module: self.class.map(|c| Line::parse_address(c.as_str())),
+            module: self
+                .class
+                .and_then(|c| Line::parse_address(c.as_str()).ok()),
             name: self.name,
             object,
         })
     }
 
-    fn parse_address(addr: &str) -> usize {
-        usize::from_str_radix(&addr[2..], 16).unwrap()
+    pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
+        usize::from_str_radix(&addr[2..], 16)
     }
 }
 
@@ -157,7 +170,7 @@ impl Display for Object {
         if let Some(ref label) = self.label {
             write!(f, "{}", label)
         } else {
-            write!(f, "{}[{}]", self.kind, self.address)
+            write!(f, "{}[{:#x}]", self.kind, self.address)
         }
     }
 }
@@ -246,12 +259,10 @@ fn stats_by_kind(graph: &ReferenceGraph) -> HashMap<&str, Stats> {
     by_kind
 }
 
-fn dominator_subtree_sizes(
-    root: NodeIndex<usize>,
-    graph: &ReferenceGraph,
-) -> HashMap<&Object, Stats> {
-    let tree = dominators::simple_fast(graph, root);
-
+fn dominator_subtree_sizes<'a>(
+    graph: &'a ReferenceGraph,
+    dom_tree: &'a dominators::Dominators<NodeIndex<usize>>,
+) -> HashMap<&'a Object, Stats> {
     let mut subtree_sizes: HashMap<&Object, Stats> = HashMap::new();
 
     // Assign each node's stats to itself
@@ -265,7 +276,7 @@ fn dominator_subtree_sizes(
         let obj = graph.node_weight(i).unwrap();
         let stats = obj.stats();
 
-        while let Some(dom) = tree.immediate_dominator(i) {
+        while let Some(dom) = dom_tree.immediate_dominator(i) {
             i = dom;
 
             subtree_sizes
@@ -283,7 +294,7 @@ fn relevant_subgraph<'a>(
     subtree_sizes: &HashMap<&'a Object, Stats>,
     relevance_threshold: f64,
 ) -> ReferenceGraph {
-    let mut subgraph: ReferenceGraph = graph.clone();
+    let mut subgraph = graph.clone();
 
     let threshold_bytes = (subtree_sizes[graph.node_weight(root).unwrap()].bytes as f64
         * relevance_threshold)
@@ -315,6 +326,34 @@ fn relevant_subgraph<'a>(
     subgraph
 }
 
+fn subgraph_dominated_by(
+    graph: &ReferenceGraph,
+    dom_tree: &dominators::Dominators<NodeIndex<usize>>,
+    address: usize,
+) -> (NodeIndex<usize>, ReferenceGraph) {
+    let subtree_root = graph
+        .node_indices()
+        .find(|i| graph.node_weight(*i).unwrap().address == address)
+        .expect("Given subtree root address not found");
+
+    let mut subgraph = graph.clone();
+
+    subgraph.retain_nodes(|_, n| {
+        if let Some(mut ds) = dom_tree.dominators(n) {
+            ds.any(|d| d == subtree_root)
+        } else {
+            false
+        }
+    });
+
+    let new_root = subgraph
+        .node_indices()
+        .find(|i| subgraph.node_weight(*i).unwrap().address == address)
+        .unwrap();
+
+    (new_root, subgraph)
+}
+
 fn write_dot_file(graph: &ReferenceGraph, filename: &str) -> std::io::Result<()> {
     let mut file = File::create(filename)?;
     write!(
@@ -334,12 +373,15 @@ fn print_largest<K: Display + Eq + Hash>(map: &HashMap<K, Stats>, count: usize) 
     for (k, stats) in sorted.iter().rev().take(count) {
         println!("{}: {} bytes ({} objects)", k, stats.bytes, stats.count);
     }
+
     let rest = sorted
         .iter()
         .rev()
         .skip(count)
         .fold(Stats::default(), |mut acc, (_, c)| acc.add(**c));
-    println!("...: {} bytes ({} objects)", rest.bytes, rest.count);
+    if rest.count > 0 {
+        println!("...: {} bytes ({} objects)", rest.bytes, rest.count);
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -348,26 +390,45 @@ fn main() -> std::io::Result<()> {
         (about: "A tool for parsing Ruby heap dumps.")
         (@arg INPUT: +required "Path to JSON heap dump file")
         (@arg DOT: -d --dot +takes_value "Dot file output")
+        (@arg ROOT: -r --root +takes_value "Filter to subtree rooted at object with this address")
         (@arg THRESHOLD: -t --threshold +takes_value "Include nodes retaining at least this fraction of memory in dot output (defaults to 0.005)")
     )
     .get_matches();
 
     let input = args.value_of("INPUT").unwrap();
-    let (root, graph) = parse(&input)?;
+    let dot_output = args.value_of("DOT");
+    let subtree_root = args
+        .value_of("ROOT")
+        .map(|r| Line::parse_address(r).expect("Invalid subtree root address"));
+    let relevance_threshold: f64 = args
+        .value_of("THRESHOLD")
+        .map(|t| t.parse().expect("Invalid relevance threshold"))
+        .unwrap_or(DEFAULT_RELEVANCE_THRESHOLD);
+
+    let (root, graph, dom_tree) = {
+        let (root, graph) = parse(&input)?;
+        let dom_tree = dominators::simple_fast(&graph, root);
+
+        if let Some(address) = subtree_root {
+            let (root, graph) = subgraph_dominated_by(&graph, &dom_tree, address);
+            let dom_tree = dominators::simple_fast(&graph, root);
+            (root, graph, dom_tree)
+        } else {
+            (root, graph, dom_tree)
+        }
+    };
+
     let by_kind = stats_by_kind(&graph);
+    let subtree_sizes = dominator_subtree_sizes(&graph, &dom_tree);
+
     println!("Object types using the most memory:");
     print_largest(&by_kind, 10);
 
-    let subtree_sizes = dominator_subtree_sizes(root, &graph);
     println!("\nObjects retaining the most memory:");
-    print_largest(&subtree_sizes, 25);
+    print_largest(&subtree_sizes, 10);
 
-    if let Some(output) = args.value_of("DOT") {
-        let threshold: f64 = args
-            .value_of("THRESHOLD")
-            .map(|t| t.parse().unwrap())
-            .unwrap_or(DEFAULT_RELEVANCE_THRESHOLD);
-        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, threshold);
+    if let Some(output) = dot_output {
+        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, relevance_threshold);
         write_dot_file(&dom_graph, &output)?;
     }
 
@@ -389,12 +450,18 @@ mod test {
         assert_eq!(10409, by_kind["String"].count);
         assert_eq!(544382, by_kind["String"].bytes);
 
-        let subtree_sizes = dominator_subtree_sizes(root, &graph);
+        let dom_tree = dominators::simple_fast(&graph, root);
+        let subtree_sizes = dominator_subtree_sizes(&graph, &dom_tree);
         let root_obj = graph.node_weight(root).unwrap();
         assert_eq!(15472, subtree_sizes[root_obj].count);
         assert_eq!(3439119, subtree_sizes[root_obj].bytes);
 
-        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, DEFAULT_RELEVANCE_THRESHOLD);
+        let (_, subgraph) = subgraph_dominated_by(&graph, &dom_tree, 140204367666240);
+        assert_eq!(25, subgraph.node_count());
+        assert_eq!(28, subgraph.edge_count());
+
+        let dom_graph =
+            relevant_subgraph(root, &graph, &subtree_sizes, DEFAULT_RELEVANCE_THRESHOLD);
         assert_eq!(33, dom_graph.node_count());
         assert_eq!(37, dom_graph.edge_count());
     }
