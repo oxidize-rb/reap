@@ -392,6 +392,7 @@ fn main() -> std::io::Result<()> {
         (@arg DOT: -d --dot +takes_value "Dot file output")
         (@arg ROOT: -r --root +takes_value "Filter to subtree rooted at object with this address")
         (@arg THRESHOLD: -t --threshold +takes_value "Include nodes retaining at least this fraction of memory in dot output (defaults to 0.005)")
+        (@arg COUNT: -n --top-n +takes_value "Print this many of the types & objects retaining the most memory")
     )
     .get_matches();
 
@@ -404,6 +405,10 @@ fn main() -> std::io::Result<()> {
         .value_of("THRESHOLD")
         .map(|t| t.parse().expect("Invalid relevance threshold"))
         .unwrap_or(DEFAULT_RELEVANCE_THRESHOLD);
+    let top_n: usize = args
+        .value_of("COUNT")
+        .map(|t| t.parse().expect("Invalid top-n count"))
+        .unwrap_or(10);
 
     let (root, graph, dom_tree) = {
         let (root, graph) = parse(&input)?;
@@ -422,14 +427,15 @@ fn main() -> std::io::Result<()> {
     let subtree_sizes = dominator_subtree_sizes(&graph, &dom_tree);
 
     println!("Object types using the most memory:");
-    print_largest(&by_kind, 10);
+    print_largest(&by_kind, top_n);
 
     println!("\nObjects retaining the most memory:");
-    print_largest(&subtree_sizes, 10);
+    print_largest(&subtree_sizes, top_n);
 
     if let Some(output) = dot_output {
         let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, relevance_threshold);
         write_dot_file(&dom_graph, &output)?;
+        println!("\nWrote {} nodes & {} edges to {}", dom_graph.node_count(), dom_graph.edge_count(), &output);
     }
 
     Ok(())
