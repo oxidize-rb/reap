@@ -59,11 +59,11 @@ Run with `--help` for full options.
 If you have `rbtrace` installed, and required in the process you're planning to trace, you can run:
 
 ```sh
-rbtrace -p $PID -e "Thread.new{require 'objspace';io=open('/tmp/heap.json', 'w');GC.start;ObjectSpace.dump_all(output: io, full: true);io.close}"
+rbtrace -p $PID -e "Thread.new{require 'objspace';f=open('/tmp/heap.json','w');ObjectSpace.dump_all(output: f, full: true);f.close}"
 ```
 
 Otherwise, you can connect to the Ruby process with `gdb`, then run:
 
 ```gdb
-call rb_eval_string_protect("Thread.new{require 'objspace';io=open('/tmp/heap.json', 'w');GC.start;ObjectSpace.dump_all(output: io, full: true);io.close}", 0)
+call rb_eval_string_protect("Thread.new{require 'objspace';f=open('/tmp/heap.json','w');ObjectSpace.dump_all(output: f, full: true);f.close}", 0)
 ```
