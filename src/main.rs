@@ -259,7 +259,7 @@ fn stats_by_kind<'a>(
 
     for i in graph.node_indices() {
         let obj = graph.node_weight(i).unwrap();
-        let by_kind = if dominators.immediate_dominator(i).is_some() {
+        let by_kind = if dominators.immediate_dominator(i).is_some() || i == dominators.root() {
             &mut live_by_kind
         } else {
             &mut garbage_by_kind
@@ -479,8 +479,10 @@ fn main() -> std::io::Result<()> {
     println!("\nObjects retaining the most live memory:");
     print_largest(&subtree_sizes, top_n);
 
-    println!("\nObjects unreachable from root");
-    print_largest(&garbage_by_kind, top_n);
+    if !garbage_by_kind.is_empty() {
+        println!("\nObjects unreachable from root:");
+        print_largest(&garbage_by_kind, top_n);
+    }
 
     if let Some(output) = dot_output {
         let dom_graph = dominator_graph(
