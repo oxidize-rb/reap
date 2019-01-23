@@ -8,10 +8,11 @@ extern crate serde_json;
 
 use bytesize::ByteSize;
 use petgraph::algo::dominators;
+use petgraph::algo::dominators::Dominators;
 use petgraph::dot;
 use petgraph::graph::NodeIndex;
 use petgraph::{Directed, Graph};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
@@ -249,21 +250,32 @@ fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     Ok((root_index, graph))
 }
 
-fn stats_by_kind(graph: &ReferenceGraph) -> HashMap<&str, Stats> {
-    let mut by_kind: HashMap<&str, Stats> = HashMap::new();
+fn stats_by_kind<'a>(
+    graph: &'a ReferenceGraph,
+    dominators: &'a Dominators<NodeIndex<usize>>,
+) -> (HashMap<&'a str, Stats>, HashMap<&'a str, Stats>) {
+    let mut live_by_kind: HashMap<&'a str, Stats> = HashMap::new();
+    let mut garbage_by_kind: HashMap<&'a str, Stats> = HashMap::new();
+
     for i in graph.node_indices() {
         let obj = graph.node_weight(i).unwrap();
+        let by_kind = if dominators.immediate_dominator(i).is_some() {
+            &mut live_by_kind
+        } else {
+            &mut garbage_by_kind
+        };
         by_kind
             .entry(&obj.kind)
             .and_modify(|c| *c = (*c).add(obj.stats()))
             .or_insert_with(|| obj.stats());
     }
-    by_kind
+
+    (live_by_kind, garbage_by_kind)
 }
 
 fn dominator_subtree_sizes<'a>(
     graph: &'a ReferenceGraph,
-    dom_tree: &'a dominators::Dominators<NodeIndex<usize>>,
+    dominators: &'a Dominators<NodeIndex<usize>>,
 ) -> HashMap<&'a Object, Stats> {
     let mut subtree_sizes: HashMap<&Object, Stats> = HashMap::new();
 
@@ -273,56 +285,68 @@ fn dominator_subtree_sizes<'a>(
         subtree_sizes.insert(obj, obj.stats());
     }
 
-    // Assign each node's stats to all of its dominators
+    // Assign each node's stats to all of its dominators, if it's reachable
     for mut i in graph.node_indices() {
         let obj = graph.node_weight(i).unwrap();
         let stats = obj.stats();
 
-        while let Some(dom) = dom_tree.immediate_dominator(i) {
-            i = dom;
+        if dominators
+            .dominators(i)
+            .and_then(|mut ds| ds.next())
+            .is_none()
+        {
+            subtree_sizes.remove(obj);
+        } else {
+            while let Some(dom) = dominators.immediate_dominator(i) {
+                i = dom;
 
-            subtree_sizes
-                .entry(graph.node_weight(i).unwrap())
-                .and_modify(|e| *e = (*e).add(stats));
+                subtree_sizes
+                    .entry(graph.node_weight(i).unwrap())
+                    .and_modify(|e| *e = (*e).add(stats));
+            }
         }
     }
 
     subtree_sizes
 }
 
-fn relevant_subgraph<'a>(
+fn dominator_graph<'a>(
     root: NodeIndex<usize>,
     graph: &'a ReferenceGraph,
+    dominators: &Dominators<NodeIndex<usize>>,
     subtree_sizes: &HashMap<&'a Object, Stats>,
     relevance_threshold: f64,
 ) -> ReferenceGraph {
-    let mut subgraph = graph.clone();
-
     let threshold_bytes = (subtree_sizes[graph.node_weight(root).unwrap()].bytes as f64
         * relevance_threshold)
         .floor() as usize;
 
-    subgraph.retain_nodes(|g, n| {
-        let obj = g.node_weight(n).unwrap();
-        subtree_sizes[obj].bytes >= threshold_bytes
-    });
+    let mut subgraph: ReferenceGraph = Graph::default();
+    let mut old_to_new: HashMap<NodeIndex<usize>, NodeIndex<usize>> = HashMap::new();
+    for i in graph.node_indices() {
+        let obj = graph.node_weight(i).unwrap();
+        if let Some(Stats { count, bytes }) = subtree_sizes.get(obj) {
+            if *bytes >= threshold_bytes {
+                let mut clone = obj.clone();
+                clone.label = Some(format!(
+                    "{}: {} self, {} refs, {} objects",
+                    obj,
+                    ByteSize(obj.bytes as u64),
+                    ByteSize((bytes - obj.bytes) as u64),
+                    count
+                ));
+                let added = subgraph.add_node(clone);
+                old_to_new.insert(i, added);
+            }
+        }
+    }
 
-    // It's not clear to me why removing nodes per above leaves us with duplicate edges
-    let mut seen: HashSet<(NodeIndex<usize>, NodeIndex<usize>)> = HashSet::new();
-    subgraph.retain_edges(|g, e| {
-        let (v, w) = g.edge_endpoints(e).unwrap();
-        v != w && seen.insert((v, w))
-    });
-
-    for mut obj in subgraph.node_weights_mut() {
-        let Stats { count, bytes } = subtree_sizes[obj];
-        obj.label = Some(format!(
-            "{}: {}b self, {}b refs, {} objects",
-            obj,
-            obj.bytes,
-            bytes - obj.bytes,
-            count
-        ));
+    for (old, new) in old_to_new.iter() {
+        if let Some(idom) = dominators.immediate_dominator(*old) {
+            subgraph.add_edge(old_to_new[&idom], *new, "");
+        } else {
+            assert!(old == &root);
+        }
     }
 
     subgraph
@@ -330,7 +354,7 @@ fn relevant_subgraph<'a>(
 
 fn subgraph_dominated_by(
     graph: &ReferenceGraph,
-    dom_tree: &dominators::Dominators<NodeIndex<usize>>,
+    dominators: &Dominators<NodeIndex<usize>>,
     address: usize,
 ) -> (NodeIndex<usize>, ReferenceGraph) {
     let subtree_root = graph
@@ -341,7 +365,7 @@ fn subgraph_dominated_by(
     let mut subgraph = graph.clone();
 
     subgraph.retain_nodes(|_, n| {
-        if let Some(mut ds) = dom_tree.dominators(n) {
+        if let Some(mut ds) = dominators.dominators(n) {
             ds.any(|d| d == subtree_root)
         } else {
             false
@@ -373,7 +397,12 @@ fn print_largest<K: Display + Eq + Hash>(map: &HashMap<K, Stats>, count: usize) 
         vec
     };
     for (k, stats) in sorted.iter().rev().take(count) {
-        println!("{}: {} bytes ({} objects)", k, stats.bytes, stats.count);
+        println!(
+            "{}: {} ({} objects)",
+            k,
+            ByteSize(stats.bytes as u64),
+            stats.count
+        );
     }
 
     let rest = sorted
@@ -382,7 +411,31 @@ fn print_largest<K: Display + Eq + Hash>(map: &HashMap<K, Stats>, count: usize) 
         .skip(count)
         .fold(Stats::default(), |mut acc, (_, c)| acc.add(**c));
     if rest.count > 0 {
-        println!("...: {} bytes ({} objects)", rest.bytes, rest.count);
+        println!(
+            "...: {} ({} objects)",
+            ByteSize(rest.bytes as u64),
+            rest.count
+        );
+    }
+}
+
+fn filter_and_find_dominators(
+    root: NodeIndex<usize>,
+    graph: ReferenceGraph,
+    subtree_root: Option<usize>,
+) -> (
+    NodeIndex<usize>,
+    ReferenceGraph,
+    Dominators<NodeIndex<usize>>,
+) {
+    let dominators = dominators::simple_fast(&graph, root);
+
+    if let Some(address) = subtree_root {
+        let (root, graph) = subgraph_dominated_by(&graph, &dominators, address);
+        let dominators = dominators::simple_fast(&graph, root);
+        (root, graph, dominators)
+    } else {
+        (root, graph, dominators)
     }
 }
 
@@ -412,32 +465,38 @@ fn main() -> std::io::Result<()> {
         .map(|t| t.parse().expect("Invalid top-n count"))
         .unwrap_or(10);
 
-    let (root, graph, dom_tree) = {
+    let (root, graph, dominators) = {
         let (root, graph) = parse(&input)?;
-        let dom_tree = dominators::simple_fast(&graph, root);
-
-        if let Some(address) = subtree_root {
-            let (root, graph) = subgraph_dominated_by(&graph, &dom_tree, address);
-            let dom_tree = dominators::simple_fast(&graph, root);
-            (root, graph, dom_tree)
-        } else {
-            (root, graph, dom_tree)
-        }
+        filter_and_find_dominators(root, graph, subtree_root)
     };
 
-    let by_kind = stats_by_kind(&graph);
-    let subtree_sizes = dominator_subtree_sizes(&graph, &dom_tree);
+    let (live_by_kind, garbage_by_kind) = stats_by_kind(&graph, &dominators);
+    let subtree_sizes = dominator_subtree_sizes(&graph, &dominators);
 
-    println!("Object types using the most memory:");
-    print_largest(&by_kind, top_n);
+    println!("Object types using the most live memory:");
+    print_largest(&live_by_kind, top_n);
 
-    println!("\nObjects retaining the most memory:");
+    println!("\nObjects retaining the most live memory:");
     print_largest(&subtree_sizes, top_n);
 
+    println!("\nObjects unreachable from root");
+    print_largest(&garbage_by_kind, top_n);
+
     if let Some(output) = dot_output {
-        let dom_graph = relevant_subgraph(root, &graph, &subtree_sizes, relevance_threshold);
+        let dom_graph = dominator_graph(
+            root,
+            &graph,
+            &dominators,
+            &subtree_sizes,
+            relevance_threshold,
+        );
         write_dot_file(&dom_graph, &output)?;
-        println!("\nWrote {} nodes & {} edges to {}", dom_graph.node_count(), dom_graph.edge_count(), &output);
+        println!(
+            "\nWrote {} nodes & {} edges to {}",
+            dom_graph.node_count(),
+            dom_graph.edge_count(),
+            &output
+        );
     }
 
     Ok(())
@@ -449,28 +508,41 @@ mod test {
 
     #[test]
     fn integration() {
-        let (root, graph) = parse("test/heap.json").unwrap();
+        let (root, graph, dominators) = {
+            let (root, graph) = parse("test/heap.json").unwrap();
+            filter_and_find_dominators(root, graph, None)
+        };
 
         assert_eq!(18982, graph.node_count());
         assert_eq!(28436, graph.edge_count());
 
-        let by_kind = stats_by_kind(&graph);
-        assert_eq!(10409, by_kind["String"].count);
-        assert_eq!(544382, by_kind["String"].bytes);
+        let (live_by_kind, garbage_by_kind) = stats_by_kind(&graph, &dominators);
+        assert_eq!(
+            10409,
+            live_by_kind["String"].count + garbage_by_kind["String"].count
+        );
+        assert_eq!(
+            544382,
+            live_by_kind["String"].bytes + garbage_by_kind["String"].bytes
+        );
 
-        let dom_tree = dominators::simple_fast(&graph, root);
-        let subtree_sizes = dominator_subtree_sizes(&graph, &dom_tree);
+        let subtree_sizes = dominator_subtree_sizes(&graph, &dominators);
         let root_obj = graph.node_weight(root).unwrap();
         assert_eq!(15472, subtree_sizes[root_obj].count);
         assert_eq!(3439119, subtree_sizes[root_obj].bytes);
 
-        let (_, subgraph) = subgraph_dominated_by(&graph, &dom_tree, 140204367666240);
+        let (_, subgraph) = subgraph_dominated_by(&graph, &dominators, 140204367666240);
         assert_eq!(25, subgraph.node_count());
         assert_eq!(28, subgraph.edge_count());
 
-        let dom_graph =
-            relevant_subgraph(root, &graph, &subtree_sizes, DEFAULT_RELEVANCE_THRESHOLD);
+        let dom_graph = dominator_graph(
+            root,
+            &graph,
+            &dominators,
+            &subtree_sizes,
+            DEFAULT_RELEVANCE_THRESHOLD,
+        );
         assert_eq!(33, dom_graph.node_count());
-        assert_eq!(37, dom_graph.edge_count());
+        assert_eq!(32, dom_graph.edge_count());
     }
 }
