@@ -1,3 +1,4 @@
+extern crate bytesize;
 #[macro_use]
 extern crate clap;
 #[macro_use]
@@ -5,6 +6,7 @@ extern crate serde;
 extern crate petgraph;
 extern crate serde_json;
 
+use bytesize::ByteSize;
 use petgraph::algo::dominators;
 use petgraph::dot;
 use petgraph::graph::NodeIndex;
