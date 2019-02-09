@@ -72,7 +72,7 @@ fn main() -> std::io::Result<()> {
         (version: "0.1")
         (about: "A tool for parsing Ruby heap dumps.")
         (@arg INPUT: +required "Path to JSON heap dump file")
-        (@arg DOT: -d --dot +takes_value "Dot file output")
+        (@arg DOT: -d --dot +takes_value "Dot file output for dominator tree")
         (@arg ROOT: -r --root +takes_value "Filter to subtree rooted at object with this address")
         (@arg THRESHOLD: -t --threshold +takes_value "Include nodes retaining at least this fraction of memory in dot output (defaults to 0.005)")
         (@arg COUNT: -n --top-n +takes_value "Print this many of the types & objects retaining the most memory")

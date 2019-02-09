@@ -2,7 +2,9 @@
 
 A tool for parsing Ruby heap dumps.
 
-Builds a dominator tree from the reference graph showing which objects are holding on to large quantities of memory.
+Builds a [dominator tree](https://en.wikipedia.org/wiki/Dominator_(graph_theory)) from the reference graph showing which objects are holding on to large quantities of memory.
+
+(Node `v` "dominates" node `w` in a directed graph if all paths from a given root to `w` run through `v`. In the context of memory references, this implies that object `v` is only live because object `w` is live.)
 
 Supports drilldown into subtrees and optional graphical output.
 
@@ -24,7 +26,7 @@ Thread[0x7f83df87dc40]: 1.1 MB (25 objects)
 Thread[0x7f83e107cd78]: 1.0 MB (7 objects)
 ...: 4.6 MB (59857 objects)
 
-Objects unreachable from root
+Objects unreachable from root:
 Class: 189.6 KB (617 objects)
 String: 81.8 KB (1174 objects)
 ARRAY: 38.6 KB (298 objects)
@@ -48,6 +50,12 @@ Thread[0x7f83df87dc40]: 1.1 MB (25 objects)
 Hash[0x7f83e10452d8][size=5]: 1.2 KB (6 objects)
 Object[0x7f83df8d62c8][CLASS]: 992 B (8 objects)
 ...: 3.0 KB (24 objects)
+
+Objects reachable from, but not dominated by, 0x7f83df87dc40:
+String: 352.3 KB (6604 objects)
+Class: 220.6 KB (283 objects)
+Regexp: 108.8 KB (139 objects)
+...: 465.2 KB (5716 objects)
 
 Wrote 1 nodes & 0 edges to out.dot
 ```
