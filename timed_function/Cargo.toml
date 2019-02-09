@@ -1,8 +1,10 @@
 [package]
 name = "timed_function"
 version = "0.1.0"
-authors = ["David Judd <david@academia.edu>"]
+authors = ["David Judd <david.a.judd@gmail.com>"]
 edition = "2018"
+description = "A procedural macro for printing timing for a function"
+license = "Apache-2.0"
 
 [lib]
 proc-macro = true
