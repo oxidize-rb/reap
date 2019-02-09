@@ -4,7 +4,7 @@ A tool for parsing Ruby heap dumps.
 
 Builds a [dominator tree](https://en.wikipedia.org/wiki/Dominator_(graph_theory)) from the reference graph showing which objects are holding on to large quantities of memory.
 
-(Node `v` "dominates" node `w` in a directed graph if all paths from a given root to `w` run through `v`. In the context of memory references, this implies that object `v` is only live because object `w` is live.)
+(Node `v` "dominates" node `w` in a directed graph if all paths from a given root to `w` run through `v`. In the context of memory references, this implies that object `w` is only live because object `v` is live.)
 
 Supports drilldown into subtrees and optional graphical output.
 
