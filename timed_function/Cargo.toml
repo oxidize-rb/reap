@@ -1,0 +1,12 @@
+[package]
+name = "timed_function"
+version = "0.1.0"
+authors = ["David Judd <david@academia.edu>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = {version = "0.15.15", features = ["full"]}
+quote = "0.6.9"

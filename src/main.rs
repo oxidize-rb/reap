@@ -5,6 +5,7 @@ extern crate clap;
 extern crate serde;
 extern crate petgraph;
 extern crate serde_json;
+extern crate timed_function;
 
 mod analyze;
 mod object;
@@ -93,6 +94,7 @@ fn main() -> std::io::Result<()> {
         .unwrap_or(10);
 
     let analysis = parse(&input, subtree_root)?;
+    println!();
 
     println!("Object types using the most live memory:");
     let (largest, rest) = analysis.live_stats_by_kind(top_n);

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use timed_function::timed;
 
 #[derive(Debug, Deserialize)]
 struct Line {
@@ -102,6 +103,7 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
     usize::from_str_radix(&addr[2..], 16)
 }
 
+#[timed]
 pub fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);

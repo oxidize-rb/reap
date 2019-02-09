@@ -5,6 +5,7 @@ use petgraph::visit::Dfs;
 use petgraph::Graph;
 use std::collections::{HashMap, HashSet};
 use std::iter::Iterator;
+use timed_function::timed;
 
 type Index = NodeIndex<usize>;
 
@@ -31,6 +32,7 @@ pub struct Analysis {
     subtree_sizes: HashMap<Index, Stats>,
 }
 
+#[timed]
 pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph) -> Analysis {
     let dominators = find_dominators(orig_root, &graph);
 
@@ -51,6 +53,7 @@ pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph) ->
     }
 }
 
+#[timed]
 fn find_dominators(root: Index, graph: &ReferenceGraph) -> HashMap<Index, Index> {
     let dominators = dominators::simple_fast(&graph, root);
 
@@ -65,6 +68,7 @@ fn find_dominators(root: Index, graph: &ReferenceGraph) -> HashMap<Index, Index>
     map
 }
 
+#[timed]
 fn remove_unreachable(
     root: Index,
     graph: &ReferenceGraph,
@@ -110,6 +114,7 @@ fn remove_unreachable(
     (root, reachable, unreachable, dominators)
 }
 
+#[timed]
 fn extract_dominated_subgraph(
     root: Index,
     graph: &ReferenceGraph,
@@ -158,6 +163,7 @@ fn extract_dominated_subgraph(
     (root, dominated, rest, dominators)
 }
 
+#[timed]
 fn find_addrs_of_filtered_edges(
     root: Index,
     reachable: &HashSet<Index>,
@@ -205,6 +211,7 @@ fn find_addrs_of_filtered_edges(
     result
 }
 
+#[timed]
 fn find_reachable_indices(root: Index, graph: &ReferenceGraph) -> HashSet<Index> {
     let mut reachable: HashSet<Index> = HashSet::new();
     reachable.insert(root);
