@@ -1,14 +1,30 @@
 # reap
 
-A tool for parsing Ruby heap dumps.
+A tool for parsing Ruby heap dumps by analyzing the reference graph.
 
-Builds a [dominator tree](https://en.wikipedia.org/wiki/Dominator_(graph_theory)) from the reference graph showing which objects are holding on to large quantities of memory.
+Supports drilldown into just the memory retained by a given object, and optional graphical output.
 
-(Node `v` "dominates" node `w` in a directed graph if all paths from a given root to `w` run through `v`. In the context of memory references, this implies that object `w` is only live because object `v` is live.)
+# When to use reap
 
-Supports drilldown into subtrees and optional graphical output.
+This tool is intended to be useful for optimizing memory usage as well as debugging memory leaks. If you have a snapshot of the heap of a Ruby process (see below for tips on getting one), `reap` can help you understand the contents of that snapshot.
 
-# Use 
+To do so, we build a [dominator tree][1] from the reference graph showing which objects are holding on to large quantities of memory. (Node `v` "dominates" node `w` in a directed graph if all paths from a given root to `w` run through `v`. In the context of memory references, this implies that object `w` is only live because object `v` is live.)
+
+[1]: https://en.wikipedia.org/wiki/Dominator_(graph_theory)
+
+## Limitations & comparisons
+
+`reap` does not currently understand garbage collection "generations", which can also be useful for finding leaks.
+
+The disadvantage of analyzing GC generations is that in order to collect the necessary data, you need to trace object allocations, which can be prohibitively expensive in production. If this is not a problem for you, you may want to try another tool such as [`heapy`][2] instead of, or in addition to, `reap`.
+
+`reap` is intended to provide useful data even when allocations are not being traced. It can also analyze fairly large (gigabyte-plus) heaps in seconds, thanks to being written in Rust rather than Ruby.
+
+[2]: https://github.com/schneems/heapy
+
+# How to use reap
+
+Run with `--help` for full documentation.
 
 Basic usage:
 
@@ -72,7 +88,11 @@ Regexp: 108.8 KB (139 objects)
 Wrote 1 nodes & 0 edges to out.dot
 ```
 
-Run with `--help` for full options.
+## Installation
+
+Ensure you have Rust's [cargo][3] package manager installed, then just `cargo install reap`.
+
+[3]: https://rustup.rs/
 
 # Getting a heap dump
 
