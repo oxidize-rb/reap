@@ -307,26 +307,18 @@ fn largest_and_rest<'a, K, I: Iterator<Item = (&'a K, Stats)>>(
 
 impl Analysis {
     pub fn live_stats_by_kind(&self, top_n: usize) -> (Vec<(&String, Stats)>, Stats) {
-        let stats = by_kind(
-            self.dominated_subgraph
-                .node_indices()
-                .map(|i| {
-                    let obj = &self.dominated_subgraph[i];
-                    (obj, obj.stats())
-                }),
-        );
+        let stats = by_kind(self.dominated_subgraph.node_indices().map(|i| {
+            let obj = &self.dominated_subgraph[i];
+            (obj, obj.stats())
+        }));
         largest_and_rest(stats.iter().map(|(k, v)| (*k, *v)), top_n)
     }
 
     pub fn retained_stats_by_kind(&self, top_n: usize) -> (Vec<(&String, Stats)>, Stats) {
-        let stats = by_kind(
-            self.dominated_subgraph
-                .node_indices()
-                .map(|i| {
-                    let obj = &self.dominated_subgraph[i];
-                    (obj, self.subtree_sizes[&i])
-                }),
-        );
+        let stats = by_kind(self.dominated_subgraph.node_indices().map(|i| {
+            let obj = &self.dominated_subgraph[i];
+            (obj, self.subtree_sizes[&i])
+        }));
         largest_and_rest(stats.iter().map(|(k, v)| (*k, *v)), top_n)
     }
 

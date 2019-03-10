@@ -153,7 +153,11 @@ mod test {
 
         let live_strs = live_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
         let dead_strs = dead_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
-        let retained_strs = retained_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
+        let retained_strs = retained_by_kind
+            .iter()
+            .find(|(k, _)| *k == "String")
+            .unwrap()
+            .1;
 
         assert_eq!(9235, live_strs.count);
         assert_eq!(1174, dead_strs.count);
@@ -181,7 +185,11 @@ mod test {
 
         let live_strs = live_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
         let dead_strs = dead_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
-        let retained_strs = retained_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
+        let retained_strs = retained_by_kind
+            .iter()
+            .find(|(k, _)| *k == "String")
+            .unwrap()
+            .1;
 
         assert_eq!(4, live_strs.count);
         assert_eq!(6604, dead_strs.count);
