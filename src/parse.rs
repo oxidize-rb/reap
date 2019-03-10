@@ -120,7 +120,7 @@ pub fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> 
     indices.insert(root_address, root_index);
     references.insert(root_address, Vec::new());
 
-    for line in reader.lines().map(|l| l.unwrap()) {
+    for line in reader.lines().map(Result::unwrap) {
         let parsed = serde_json::from_str::<Line>(&line)
             .expect(&line)
             .parse()

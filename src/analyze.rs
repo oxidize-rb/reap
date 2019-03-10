@@ -297,7 +297,7 @@ fn largest_and_rest<'a, K, I: Iterator<Item = (&'a K, Stats)>>(
         (sorted, Stats::default())
     } else {
         (
-            sorted[0..count].iter().cloned().collect(),
+            sorted[0..count].to_vec(),
             sorted[count..]
                 .iter()
                 .fold(Stats::default(), |mut acc, (_, c)| acc.add(*c)),
