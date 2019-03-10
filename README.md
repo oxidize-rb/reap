@@ -26,6 +26,12 @@ Thread[0x7f83df87dc40]: 1.1 MB (25 objects)
 Thread[0x7f83e107cd78]: 1.0 MB (7 objects)
 ...: 4.6 MB (59857 objects)
 
+Object types retaining the most live memory:
+ROOT: 3.4 MB (15472 objects)
+Thread: 2.1 MB (70 objects)
+ARRAY: 949.3 KB (13053 objects)
+...: 3.6 MB (46766 objects)
+
 Objects unreachable from root:
 Class: 189.6 KB (617 objects)
 String: 81.8 KB (1174 objects)
@@ -50,6 +56,12 @@ Thread[0x7f83df87dc40]: 1.1 MB (25 objects)
 Hash[0x7f83e10452d8][size=5]: 1.2 KB (6 objects)
 Object[0x7f83df8d62c8][CLASS]: 992 B (8 objects)
 ...: 3.0 KB (24 objects)
+
+Object types retaining the most live memory:
+Thread: 1.1 MB (25 objects)
+Hash: 2.2 KB (12 objects)
+Class: 1.9 KB (10 objects)
+...: 1.1 KB (16 objects)
 
 Objects reachable from, but not dominated by, 0x7f83df87dc40:
 String: 352.3 KB (6604 objects)

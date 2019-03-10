@@ -104,6 +104,10 @@ fn main() -> std::io::Result<()> {
     let (largest, rest) = analysis.dominator_subtree_stats(top_n);
     print_largest(&largest, rest);
 
+    println!("\nObject types retaining the most live memory:");
+    let (largest, rest) = analysis.retained_stats_by_kind(top_n);
+    print_largest(&largest, rest);
+
     if subtree_root.is_none() {
         println!("\nObjects unreachable from root:");
         let (largest, rest) = analysis.unreachable_stats_by_kind(top_n);
@@ -145,12 +149,18 @@ mod test {
 
         let (live_by_kind, _) = analysis.live_stats_by_kind(usize::max_value());
         let (dead_by_kind, _) = analysis.unreachable_stats_by_kind(usize::max_value());
+        let (retained_by_kind, _) = analysis.retained_stats_by_kind(usize::max_value());
 
         let live_strs = live_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
         let dead_strs = dead_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
+        let retained_strs = retained_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
 
-        assert_eq!(10409, live_strs.count + dead_strs.count);
-        assert_eq!(544382, live_strs.bytes + dead_strs.bytes);
+        assert_eq!(9235, live_strs.count);
+        assert_eq!(1174, dead_strs.count);
+        assert_eq!(462583, live_strs.bytes);
+        assert_eq!(81799, dead_strs.bytes);
+        assert_eq!(9408, retained_strs.count);
+        assert_eq!(486278, retained_strs.bytes);
 
         let dom_graph = analysis.relevant_dominator_subgraph(0.005);
         assert_eq!(33, dom_graph.node_count());
@@ -167,12 +177,18 @@ mod test {
 
         let (live_by_kind, _) = analysis.live_stats_by_kind(usize::max_value());
         let (dead_by_kind, _) = analysis.unreachable_stats_by_kind(usize::max_value());
+        let (retained_by_kind, _) = analysis.retained_stats_by_kind(usize::max_value());
 
         let live_strs = live_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
         let dead_strs = dead_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
+        let retained_strs = retained_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
 
-        assert_eq!(6608, live_strs.count + dead_strs.count);
-        assert_eq!(352491, live_strs.bytes + dead_strs.bytes);
+        assert_eq!(4, live_strs.count);
+        assert_eq!(6604, dead_strs.count);
+        assert_eq!(208, live_strs.bytes);
+        assert_eq!(352283, dead_strs.bytes);
+        assert_eq!(4, retained_strs.count);
+        assert_eq!(208, retained_strs.bytes);
 
         let dom_graph = analysis.relevant_dominator_subgraph(0.0);
         assert_eq!(25, dom_graph.node_count());

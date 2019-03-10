@@ -273,9 +273,8 @@ fn dominator_subtree_sizes(
     subtree_sizes
 }
 
-fn by_kind<'a, I: Iterator<Item = &'a Object>>(objs: I) -> HashMap<&'a String, Stats> {
-    objs.fold(HashMap::new(), |mut by_kind, obj| {
-        let stats = obj.stats();
+fn by_kind<'a, I: Iterator<Item = (&'a Object, Stats)>>(objs: I) -> HashMap<&'a String, Stats> {
+    objs.fold(HashMap::new(), |mut by_kind, (obj, stats)| {
         by_kind
             .entry(&obj.kind)
             .and_modify(|c| *c = (*c).add(stats))
@@ -311,13 +310,28 @@ impl Analysis {
         let stats = by_kind(
             self.dominated_subgraph
                 .node_indices()
-                .map(|i| &self.dominated_subgraph[i]),
+                .map(|i| {
+                    let obj = &self.dominated_subgraph[i];
+                    (obj, obj.stats())
+                }),
+        );
+        largest_and_rest(stats.iter().map(|(k, v)| (*k, *v)), top_n)
+    }
+
+    pub fn retained_stats_by_kind(&self, top_n: usize) -> (Vec<(&String, Stats)>, Stats) {
+        let stats = by_kind(
+            self.dominated_subgraph
+                .node_indices()
+                .map(|i| {
+                    let obj = &self.dominated_subgraph[i];
+                    (obj, self.subtree_sizes[&i])
+                }),
         );
         largest_and_rest(stats.iter().map(|(k, v)| (*k, *v)), top_n)
     }
 
     pub fn unreachable_stats_by_kind(&self, top_n: usize) -> (Vec<(&String, Stats)>, Stats) {
-        let stats = by_kind(self.rest.iter());
+        let stats = by_kind(self.rest.iter().map(|o| (o, o.stats())));
         largest_and_rest(stats.iter().map(|(k, v)| (*k, *v)), top_n)
     }
 
