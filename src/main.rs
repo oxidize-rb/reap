@@ -3,13 +3,17 @@ extern crate bytesize;
 extern crate clap;
 #[macro_use]
 extern crate serde;
+extern crate libc;
 extern crate petgraph;
+extern crate proc_maps;
+extern crate read_process_memory;
 extern crate serde_json;
 extern crate timed_function;
 
 mod analyze;
+mod procmap; // TODO `proc`
 mod object;
-mod parse;
+mod parse; // TODO `json`
 
 use crate::object::*;
 use bytesize::ByteSize;
@@ -17,6 +21,9 @@ use petgraph::dot;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::prelude::*;
+
+// TODO structopt
+// TODO Box<dyn Error>
 
 fn write_dot_file(graph: &ReferenceGraph, filename: &str) -> std::io::Result<()> {
     let mut file = File::create(filename)?;
@@ -52,8 +59,12 @@ fn print_largest<K: Display>(largest: &[(K, Stats)], rest: Stats) {
     }
 }
 
-fn parse(file: &str, rooted_at: Option<usize>) -> std::io::Result<analyze::Analysis> {
-    let (root, graph) = parse::parse(&file)?;
+fn parse(file: &str, rooted_at: Option<usize>, pid: bool) -> std::io::Result<analyze::Analysis> {
+    let (root, graph) = if pid {
+        procmap::parse(file.parse().unwrap())?
+    } else {
+        parse::parse(&file)?
+    };
 
     let subgraph_root = rooted_at
         .map(|address| {
@@ -71,11 +82,12 @@ fn main() -> std::io::Result<()> {
     let args = clap_app!(reap =>
         (version: "0.1")
         (about: "A tool for parsing Ruby heap dumps.")
-        (@arg INPUT: +required "Path to JSON heap dump file")
+        (@arg INPUT: +required "Path to JSON heap dump file or PID")
         (@arg DOT: -d --dot +takes_value "Dot file output for dominator tree")
         (@arg ROOT: -r --root +takes_value "Filter to subtree rooted at object with this address")
         (@arg THRESHOLD: -t --threshold +takes_value "Include nodes retaining at least this fraction of memory in dot output (defaults to 0.005)")
         (@arg COUNT: -n --top-n +takes_value "Print this many of the types & objects retaining the most memory")
+        (@arg PID: -p --pid "Expect a PID instead of a path to a JSON heap dump file")
     )
     .get_matches();
 
@@ -92,8 +104,9 @@ fn main() -> std::io::Result<()> {
         .value_of("COUNT")
         .map(|t| t.parse().expect("Invalid top-n count"))
         .unwrap_or(10);
+    let pid = args.is_present("PID");
 
-    let analysis = parse(&input, subtree_root)?;
+    let analysis = parse(&input, subtree_root, pid)?;
     println!();
 
     println!("Object types using the most live memory:");
@@ -141,7 +154,7 @@ mod test {
 
     #[test]
     fn whole_heap() {
-        let analysis = parse("test/heap.json", None).unwrap();
+        let analysis = parse("test/heap.json", None, false).unwrap();
 
         let totals = analysis.dominated_totals();
         assert_eq!(15472, totals.count);
@@ -173,7 +186,7 @@ mod test {
 
     #[test]
     fn subtree() {
-        let analysis = parse("test/heap.json", Some(140204367666240)).unwrap();
+        let analysis = parse("test/heap.json", Some(140204367666240), false).unwrap();
 
         let totals = analysis.dominated_totals();
         assert_eq!(25, totals.count);

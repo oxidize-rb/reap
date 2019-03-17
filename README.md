@@ -102,8 +102,8 @@ If you have `rbtrace` installed, and required in the process you're planning to 
 rbtrace -p $PID -e "Thread.new{require 'objspace';f=open('/tmp/heap.json','w');ObjectSpace.dump_all(output: f, full: true);f.close}"
 ```
 
-Otherwise, you can connect to the Ruby process with `gdb`, then run:
+Otherwise, you can connect to the Ruby process with `gdb` or `lldb`, then run:
 
 ```gdb
-call rb_eval_string_protect("Thread.new{require 'objspace';f=open('/tmp/heap.json','w');ObjectSpace.dump_all(output: f, full: true);f.close}", 0)
+call (void*) rb_eval_string_protect("Thread.new{require 'objspace';f=open('/tmp/heap.json','w');ObjectSpace.dump_all(output: f, full: true);f.close}", 0)
 ```
