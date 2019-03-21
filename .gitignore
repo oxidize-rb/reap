@@ -1,3 +1,6 @@
 /target
 /timed_function/target
 **/*.rs.bk
+/*.txt
+/*.dump
+/*.json
