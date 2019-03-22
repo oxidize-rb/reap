@@ -11,9 +11,9 @@ extern crate serde_json;
 extern crate timed_function;
 
 mod analyze;
-mod procmap; // TODO `proc`
 mod object;
-mod parse; // TODO `json`
+mod parse;
+mod procmap; // TODO `proc` // TODO `json`
 
 use crate::object::*;
 use bytesize::ByteSize;

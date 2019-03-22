@@ -2,14 +2,9 @@ use crate::object::*;
 use petgraph::graph::NodeIndex;
 use petgraph::Graph;
 use proc_maps::{get_process_maps, MapRange};
-use read_process_memory::{Pid, ProcessHandle, TryIntoProcessHandle, CopyAddress, copy_address};
-use regex::bytes::Regex;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::Cursor;
-use timed_function::timed;
+use read_process_memory::{copy_address, CopyAddress, Pid, ProcessHandle, TryIntoProcessHandle};
 use std::collections::HashMap;
-use byteorder::{NativeEndian, ReadBytesExt};
+use timed_function::timed;
 
 type VALUE = u64;
 const POINTER_BYTES: usize = 8;
@@ -17,22 +12,6 @@ const MAX_FLAGS: VALUE = u32::max_value() as VALUE;
 const HEAP_PAGE_BYTES: usize = 16384;
 const RVALUE_WIDTH: usize = 5;
 const RVALUE_BYTES: usize = RVALUE_WIDTH * POINTER_BYTES;
-
-        /*
-        // TODO Handle USE_FLONUM false for old versions?
-        //
-        const Qfalse: usize = 0x00;		/* ...0000 0000 */
-        const Qtrue: usize  = 0x14;		/* ...0001 0100 */
-        const Qnil: usize   = 0x08;		/* ...0000 1000 */
-        const Qundef: usize = 0x34;		/* ...0011 0100 */
-
-        const ImmediateMask: usize = 0x07;
-        const FixnumFlag: usize    = 0x01;	/* ...xxxx xxx1 */
-        const FlonumMask: usize    = 0x03;
-        const FlonumFlag: usize    = 0x02;	/* ...xxxx xx10 */
-        const SymbolFlag: usize    = 0x0c;	/* ...0000 1100 */
-        const SpecialShift: usize  = 8;
-        */
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 enum Type {
@@ -52,19 +31,17 @@ enum Type {
     Match = 0x0d,
     Complex = 0x0e,
     Rational = 0x0f,
-    Nil = 0x11,
-    True = 0x12,
-    False = 0x13,
+    // Nil = 0x11,
+    // True = 0x12,
+    // False = 0x13,
     Symbol = 0x14,
-    Fixnum = 0x15,
-    Undef = 0x16,
+    // Fixnum = 0x15,
+    // Undef = 0x16,
     IMemo = 0x1a,
     Node = 0x1b,
     IClass = 0x1c,
     Zombie = 0x1d,
 }
-
-const EMBED_FLAG: VALUE = 1 << 13;
 
 impl Type {
     #[inline]
@@ -98,17 +75,146 @@ impl Type {
 
 #[derive(Debug)]
 enum ArrayData {
-    Inline { len: usize, values: [VALUE; 3] },
+    Embedded { len: usize, values: [VALUE; 3] },
     Heap { len: usize, ptr: usize }, // TODO Special treatment for `shared`
+}
+
+impl ArrayData {
+    #[inline]
+    pub fn from_rvalue(flags: VALUE, data: &[VALUE]) -> ArrayData {
+        debug_assert!(data.len() == RVALUE_WIDTH);
+
+        let embedded = ((1 << 13) & flags) > 0; // See RARRAY_EMBED_FLAG
+        if embedded {
+            let len = ((flags >> 15) & 0b11) as usize; // See RARRAY_EMBED_LEN_MASK
+            let mut values = [0; 3];
+            values[0..len].copy_from_slice(&data[2..2 + len]);
+            ArrayData::Embedded { len, values }
+        } else {
+            let len = data[2] as usize;
+            let ptr = data[4] as usize;
+            ArrayData::Heap { len, ptr }
+        }
+    }
+
+    #[inline]
+    pub fn references(&self, heap: &[HeapPage], proc: &ProcessHandle) -> Vec<usize> {
+        let mut refs: Vec<usize> = Vec::new();
+        let mut with_values = |values: &[VALUE]| {
+            for v in values {
+                let addr = *v as usize;
+                if addr % RVALUE_BYTES == 0 && heap.iter().any(|p| p.deref(addr).is_some()) {
+                    refs.push(addr)
+                }
+            }
+        };
+        match self {
+            ArrayData::Embedded { len, values } => with_values(&values[0..*len]),
+            ArrayData::Heap { len, ptr } => {
+                if let Ok(bytes) = copy_address(*ptr, *len * POINTER_BYTES, proc) {
+                    with_values(bytes_to_values(&bytes))
+                } else {
+                    dbg!(("Read failed", ptr, len));
+                }
+            }
+        };
+        refs
+    }
+}
+
+const STRING_EMBED_BYTES: usize = RVALUE_BYTES - 2 * POINTER_BYTES;
+
+#[derive(Debug)]
+enum StringData {
+    Embedded {
+        len: usize,
+        bytes: [u8; STRING_EMBED_BYTES],
+    },
+    Heap {
+        len: usize,
+        ptr: usize,
+    }, // TODO Special treatment for `shared`
+}
+
+impl StringData {
+    #[inline]
+    pub fn from_rvalue(flags: VALUE, data: &[VALUE]) -> Result<StringData, ()> {
+        debug_assert!(data.len() == RVALUE_WIDTH);
+
+        let embedded = ((1 << 13) & flags) == 0; // See RSTRING_NOEMBED
+        if embedded {
+            let len = ((flags >> 14) & 0b11111) as usize; // See RSTRING_EMBED_LEN_MASK
+            if len > STRING_EMBED_BYTES {
+                return Err(());
+            }
+
+            let available_bytes = values_to_bytes(&data[2..]);
+            let mut bytes = [0; STRING_EMBED_BYTES];
+            bytes[0..len].copy_from_slice(&available_bytes[0..len]);
+            Ok(StringData::Embedded { len, bytes })
+        } else {
+            let len = data[2] as usize;
+            let ptr = data[3] as usize;
+            Ok(StringData::Heap { len, ptr })
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ObjectData {
+    Embedded { ivars: [VALUE; 3] },
+    Heap { len: u32, ptr: usize },
+}
+
+impl ObjectData {
+    #[inline]
+    pub fn from_rvalue(flags: VALUE, data: &[VALUE]) -> ObjectData {
+        debug_assert!(data.len() == RVALUE_WIDTH);
+
+        let embedded = ((1 << 13) & flags) > 0; // See ROBJECT_EMBED
+        if embedded {
+            let mut ivars = [0; 3];
+            ivars.copy_from_slice(&data[2..RVALUE_WIDTH]);
+            ObjectData::Embedded { ivars }
+        } else {
+            let len = data[2] as u32;
+            let ptr = data[3] as usize;
+            ObjectData::Heap { len, ptr }
+        }
+    }
+
+    #[inline]
+    pub fn references(&self, heap: &[HeapPage], proc: &ProcessHandle) -> Vec<usize> {
+        let mut refs: Vec<usize> = Vec::new();
+        let mut with_values = |values: &[VALUE]| {
+            for v in values {
+                let addr = *v as usize;
+                if addr % RVALUE_BYTES == 0 && heap.iter().any(|p| p.deref(addr).is_some()) {
+                    refs.push(addr)
+                }
+            }
+        };
+        match self {
+            ObjectData::Embedded { ivars } => with_values(&ivars[..]),
+            ObjectData::Heap { len, ptr } => {
+                if let Ok(bytes) = copy_address(*ptr, (*len as usize) * POINTER_BYTES, proc) {
+                    with_values(bytes_to_values(&bytes))
+                } else {
+                    dbg!(("Read failed", ptr, len));
+                }
+            }
+        };
+        refs
+    }
 }
 
 #[derive(Debug)]
 enum RValue {
     Free { next: usize },
-    Object { klass: usize },
+    Object { klass: usize, data: ObjectData },
     Class { klass: usize },
     Module { klass: usize },
-    String { klass: usize },
+    String { klass: usize, data: StringData },
     Array { klass: usize, data: ArrayData },
     Hash { klass: usize },
     Data { klass: usize },
@@ -118,9 +224,8 @@ enum RValue {
 }
 
 impl RValue {
-
     #[inline]
-    pub fn from_data(heap_page: usize, offset: usize, data: &[VALUE]) -> RValue {
+    pub fn from_data(heap_page: usize, _offset: usize, data: &[VALUE]) -> RValue {
         debug_assert!(data.len() == RVALUE_WIDTH);
 
         let flags = data[0];
@@ -143,29 +248,34 @@ impl RValue {
                 } else {
                     RValue::Invalid
                 }
+            }
+            Ok(Type::Object) => RValue::Object {
+                klass: pointer,
+                data: ObjectData::from_rvalue(flags, data),
             },
-            Ok(Type::Object) => RValue::Object { klass: pointer },
             Ok(Type::Class) => RValue::Class { klass: pointer },
             Ok(Type::Module) => RValue::Module { klass: pointer },
-            Ok(Type::String) => RValue::String { klass: pointer },
-            Ok(Type::Array) => {
-                let embedded = (EMBED_FLAG & flags) > 0;
-                let array_data = if embedded {
-                    let len = ((flags >> 15) & 0b11) as usize;
-                    let mut values = [0; 3];
-                    values[0..len].copy_from_slice(&data[2..2 + len]);
-                    ArrayData::Inline { len, values }
+            Ok(Type::String) => {
+                if let Ok(strdata) = StringData::from_rvalue(flags, data) {
+                    RValue::String {
+                        klass: pointer,
+                        data: strdata,
+                    }
                 } else {
-                    let len = data[2] as usize;
-                    let ptr = data[4] as usize;
-                    ArrayData::Heap { len, ptr }
-                };
-                RValue::Array { klass: pointer, data: array_data }
+                    RValue::Invalid
+                }
+            }
+            Ok(Type::Array) => RValue::Array {
+                klass: pointer,
+                data: ArrayData::from_rvalue(flags, data),
             },
             Ok(Type::Hash) => RValue::Hash { klass: pointer },
             Ok(Type::Data) => RValue::Data { klass: pointer },
             Ok(Type::IMemo) => RValue::IMemo,
-            Ok(t) =>  RValue::Other { klass: pointer, rbtype: t },
+            Ok(t) => RValue::Other {
+                klass: pointer,
+                rbtype: t,
+            },
             Err(_) => RValue::Invalid,
         }
     }
@@ -182,37 +292,29 @@ impl RValue {
     pub fn references(&self, heap: &[HeapPage], proc: &ProcessHandle) -> Vec<usize> {
         let mut refs = match self {
             RValue::Free { .. } => Vec::new(),
-            RValue::Object { .. } => Vec::new(),
+            RValue::Object { klass, data } => {
+                let mut refs: Vec<usize> = data.references(heap, proc);
+                if *klass > 0 {
+                    refs.push(*klass);
+                }
+                refs
+            }
             RValue::Class { .. } => Vec::new(),
             RValue::Module { .. } => Vec::new(),
-            RValue::String { .. } => Vec::new(),
-            RValue::Array { klass, data } => {
+            RValue::String { klass, .. } => {
                 let mut refs: Vec<usize> = Vec::new();
                 if *klass > 0 {
                     refs.push(*klass);
                 }
-                let mut with_values = |values: &[VALUE]| {
-                    for v in values {
-                        let addr = *v as usize;
-                        if addr % RVALUE_BYTES == 0 && heap.iter().any(|p| p.deref(addr).is_some()) {
-                            refs.push(addr)
-                        }
-                    }
-                };
-                match data {
-                    ArrayData::Inline { len, values } => {
-                        with_values(&values[0..*len])
-                    }
-                    ArrayData::Heap { len, ptr } => {
-                        if let Ok(bytes) = copy_address(*ptr, *len, proc) {
-                            with_values(bytes_to_values(&bytes))
-                        } else {
-                            dbg!(("Read failed", ptr, len));
-                        }
-                    }
-                };
                 refs
-            },
+            }
+            RValue::Array { klass, data } => {
+                let mut refs: Vec<usize> = data.references(heap, proc);
+                if *klass > 0 {
+                    refs.push(*klass);
+                }
+                refs
+            }
             RValue::Hash { .. } => Vec::new(),
             RValue::Data { .. } => Vec::new(),
             RValue::IMemo => Vec::new(),
@@ -249,23 +351,42 @@ impl RValue {
     pub fn free(&self) -> bool {
         match self {
             RValue::Free { .. } => true,
-            _ => false
+            _ => false,
         }
     }
 
     #[inline]
     pub fn kind(&self) -> String {
         match self {
-            RValue::Object { klass, .. } => "Object".to_string(),
-            RValue::Class { klass, .. } => "Class".to_string(),
-            RValue::Module { klass, .. } => "Module".to_string(),
-            RValue::String { klass, .. } => "String".to_string(),
-            RValue::Array { klass, .. } => "Array".to_string(),
-            RValue::Hash { klass, .. } => "Hash".to_string(),
-            RValue::Data { klass, .. } => "Data".to_string(),
+            RValue::Object { .. } => "Object".to_string(),
+            RValue::Class { .. } => "Class".to_string(),
+            RValue::Module { .. } => "Module".to_string(),
+            RValue::String { .. } => "String".to_string(),
+            RValue::Array { .. } => "Array".to_string(),
+            RValue::Hash { .. } => "Hash".to_string(),
+            RValue::Data { .. } => "Data".to_string(),
             RValue::IMemo => "IMemo".to_string(),
             RValue::Other { rbtype, .. } => format!("{:?}", rbtype),
             _ => panic!(),
+        }
+    }
+
+    #[inline]
+    pub fn bytesize(&self) -> usize {
+        match self {
+            RValue::Array {
+                data: ArrayData::Heap { len, .. },
+                ..
+            } => RVALUE_BYTES + POINTER_BYTES * *len,
+            RValue::Object {
+                data: ObjectData::Heap { len, .. },
+                ..
+            } => RVALUE_BYTES + POINTER_BYTES * (*len as usize),
+            RValue::String {
+                data: StringData::Heap { len, .. },
+                ..
+            } => RVALUE_BYTES + *len,
+            _ => RVALUE_BYTES,
         }
     }
 }
@@ -278,11 +399,21 @@ struct HeapPage {
 
 impl HeapPage {
     pub fn from_data(addr: usize, data: &[VALUE]) -> Result<HeapPage, ()> {
-        let rvalues = data.chunks_exact(RVALUE_WIDTH).enumerate().map(|(i,v)| {
-            RValue::from_data(addr, i, v)
-        }).collect::<Vec<_>>();
+        let rvalues = data
+            .chunks_exact(RVALUE_WIDTH)
+            .enumerate()
+            .map(|(i, v)| RValue::from_data(addr, i, v))
+            .collect::<Vec<_>>();
 
-        if rvalues.iter().filter(|v| match v { RValue::Invalid => true, _ => false }).count() >= 2 {
+        if rvalues
+            .iter()
+            .filter(|v| match v {
+                RValue::Invalid => true,
+                _ => false,
+            })
+            .count()
+            >= 2
+        {
             Err(())
         } else if rvalues.iter().filter(|v| v.is_last_free_value()).count() >= 3 {
             Err(())
@@ -315,12 +446,15 @@ impl HeapPage {
 pub fn parse(pid: Pid) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let handle = pid.try_into_process_handle()?;
 
-    let procmaps: Vec<MapRange> = get_process_maps(pid)?.into_iter().filter(|m| {
-        m.is_read()
-    }).collect();
+    let procmaps: Vec<MapRange> = get_process_maps(pid)?
+        .into_iter()
+        .filter(|m| m.is_read())
+        .collect();
 
     // TODO Darwin specific
-    let maybe_heap = procmaps.iter().filter(|m| m.filename().iter().all(|n| n.contains("dyld")));
+    let maybe_heap = procmaps
+        .iter()
+        .filter(|m| m.filename().iter().all(|n| n.contains("dyld")));
 
     let mut pages: Vec<HeapPage> = Vec::new();
     let mut buffer = vec![0u8; HEAP_PAGE_BYTES];
@@ -345,7 +479,11 @@ pub fn parse(pid: Pid) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
         }
     }
 
-    let invalid_rvalues = (&pages).iter().flat_map(|p| p.contents()).filter(|r| !r.valid(&pages)).count();
+    let invalid_rvalues = (&pages)
+        .iter()
+        .flat_map(|p| p.contents())
+        .filter(|r| !r.valid(&pages))
+        .count();
     dbg!(invalid_rvalues);
 
     let mut graph = Graph::default();
@@ -356,17 +494,23 @@ pub fn parse(pid: Pid) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
         for (i, r) in p.contents().iter().enumerate() {
             if r.valid(&pages) && !r.free() {
                 let addr = p.address(i);
-                indices.insert(addr, graph.add_node(Object {
-                    address: addr,
-                    bytes: RVALUE_BYTES,
-                    kind: r.kind(),
-                    label: None,
-                }));
+                indices.insert(
+                    addr,
+                    graph.add_node(Object {
+                        address: addr,
+                        bytes: r.bytesize(),
+                        kind: r.kind(),
+                        label: None,
+                    }),
+                );
             }
         }
     }
 
-    let ruby_maps = procmaps.iter().filter(|m| m.filename().iter().all(|n| n.contains("bin/ruby")) || m.filename().iter().all(|n| n.contains("libruby")));
+    let ruby_maps = procmaps.iter().filter(|m| {
+        m.filename().iter().all(|n| n.contains("bin/ruby"))
+            || m.filename().iter().all(|n| n.contains("libruby"))
+    });
 
     for m in ruby_maps {
         let mut addr: usize = next_aligned(m.start(), POINTER_BYTES);
@@ -384,7 +528,7 @@ pub fn parse(pid: Pid) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
                 let addr = *d as usize;
                 if addr % RVALUE_BYTES == 0 {
                     for p in &pages {
-                        if let Some(v) = p.deref(addr) {
+                        if p.deref(addr).is_some() {
                             if let Some(n) = indices.get(&addr) {
                                 graph.add_edge(root, *n, EDGE_WEIGHT);
                             }
@@ -418,12 +562,13 @@ pub fn parse(pid: Pid) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
 
 #[inline]
 fn bytes_to_values(data: &[u8]) -> &[VALUE] {
-    unsafe {
-        std::slice::from_raw_parts(
-            data.as_ptr() as *const VALUE,
-            data.len() / POINTER_BYTES
-        )
-    }
+    // TODO Clippy seems right to warn about alignment here
+    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const VALUE, data.len() / POINTER_BYTES) }
+}
+
+#[inline]
+fn values_to_bytes(data: &[VALUE]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * POINTER_BYTES) }
 }
 
 // Next address after `addr` that has given alignment
