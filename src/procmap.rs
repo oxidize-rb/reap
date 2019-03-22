@@ -1,4 +1,5 @@
 use crate::object::*;
+use libc::{c_char, c_int};
 use petgraph::graph::NodeIndex;
 use petgraph::Graph;
 use proc_maps::{get_process_maps, MapRange};
@@ -38,7 +39,7 @@ enum Type {
     // Fixnum = 0x15,
     // Undef = 0x16,
     IMemo = 0x1a,
-    Node = 0x1b,
+    // Node = 0x1b,
     IClass = 0x1c,
     Zombie = 0x1d,
 }
@@ -65,7 +66,6 @@ impl Type {
             0x0f => Ok(Type::Rational),
             0x14 => Ok(Type::Symbol),
             0x1a => Ok(Type::IMemo),
-            0x1b => Ok(Type::Node),
             0x1c => Ok(Type::IClass),
             0x1d => Ok(Type::Zombie),
             _ => Err(()),
@@ -209,11 +209,230 @@ impl ObjectData {
 }
 
 #[derive(Debug)]
+enum ClassData {
+    TwoOne {
+        superclass: usize,
+        method_table: usize,
+        ext: usize,
+    },
+    OneNine,
+}
+
+#[repr(C)]
+struct rb_id_table {
+    capa: c_int,
+    num: c_int,
+    used: c_int,
+    item_t: *const rb_id_item,
+}
+
+#[repr(C)]
+struct rb_id_item {
+    key: usize,
+    _collision: c_int, // TODO Only on 64-bit
+    val: VALUE,
+}
+
+#[inline]
+fn with_id_table_values<CB: FnMut(VALUE) -> ()>(
+    ptr: usize,
+    proc: &ProcessHandle,
+    mut cb: CB,
+) -> Result<(), std::io::Error> {
+    let table: rb_id_table = copy_struct(ptr, proc)?;
+    let items: Vec<rb_id_item> = copy_vec(table.item_t as usize, table.capa as usize, proc)?;
+    for item in items {
+        if item.key > 0 {
+            cb(item.val);
+        }
+    }
+    Ok(())
+}
+
+#[repr(C)]
+struct st_table {
+    _entry_power: c_char,
+    _bin_power: c_char,
+    _size_ind: c_char,
+    _rebuilds_num: c_int,
+    _type: usize,
+    _num_entries: usize,
+    _bins: usize,
+    entries_start: usize,
+    entries_bound: usize,
+    entries: *const st_table_entry,
+}
+
+#[repr(C)]
+struct st_table_entry {
+    hash: usize,
+    key: VALUE,
+    record: VALUE,
+}
+
+#[inline]
+fn with_st_table_kvs<CB: FnMut(VALUE, VALUE) -> ()>(
+    ptr: usize,
+    proc: &ProcessHandle,
+    mut cb: CB,
+) -> Result<(), std::io::Error> {
+    let st_table {
+        entries,
+        entries_start,
+        entries_bound,
+        ..
+    } = copy_struct(ptr, proc)?;
+    let start = entries as usize + entries_start * std::mem::size_of::<st_table_entry>();
+    let end = entries as usize + entries_bound * std::mem::size_of::<st_table_entry>();
+
+    let items: Vec<st_table_entry> = copy_vec(start, end - start, proc)?;
+    for item in items {
+        if item.hash != usize::max_value() {
+            cb(item.key, item.record);
+        }
+    }
+    Ok(())
+}
+
+#[repr(C)]
+struct rb_const_entry_struct {
+    _flag: usize,
+    _line: c_int,
+    value: usize,
+    file: usize,
+}
+
+#[repr(C)]
+struct rb_classext_struct_21 {
+    _iv_index_tbl: *const st_table,
+    iv_tbl: *const st_table,
+    const_tbl: *const rb_id_table,
+}
+
+// Adapted from rbspy
+#[inline]
+fn copy_struct<U, T>(addr: usize, source: &T) -> Result<U, std::io::Error>
+where
+    T: CopyAddress,
+{
+    let result = copy_address(addr, std::mem::size_of::<U>(), source)?;
+    let s: U = unsafe { std::ptr::read(result.as_ptr() as *const _) };
+    Ok(s)
+}
+
+// Adapted from rbspy
+#[inline]
+fn copy_vec<U, T>(addr: usize, length: usize, source: &T) -> Result<Vec<U>, std::io::Error>
+where
+    T: CopyAddress,
+{
+    let mut vec = copy_address(addr, length * std::mem::size_of::<U>(), source)?;
+    let capacity = vec.capacity() as usize / std::mem::size_of::<U>() as usize;
+    let ptr = vec.as_mut_ptr() as *mut U;
+    std::mem::forget(vec);
+    unsafe { Ok(Vec::from_raw_parts(ptr, capacity, capacity)) }
+}
+
+impl ClassData {
+    #[inline]
+    pub fn from_rvalue(_flags: VALUE, data: &[VALUE]) -> ClassData {
+        ClassData::TwoOne {
+            superclass: data[2] as usize,
+            method_table: data[4] as usize,
+            ext: data[3] as usize,
+        }
+    }
+
+    #[inline]
+    pub fn references(&self, heap: &[HeapPage], proc: &ProcessHandle) -> Vec<usize> {
+        let mut refs: Vec<usize> = Vec::new();
+        match self {
+            ClassData::TwoOne {
+                superclass,
+                method_table,
+                ext,
+            } => {
+                if *superclass > 0 {
+                    refs.push(*superclass);
+                }
+                if *method_table > 0 {
+                    if with_id_table_values(*method_table, proc, |val| {
+                        let addr = val as usize;
+                        if addr % RVALUE_BYTES == 0 && heap.iter().any(|p| p.deref(addr).is_some())
+                        {
+                            refs.push(addr);
+                        }
+                    })
+                    .is_err()
+                    {
+                        dbg!(("Read failed", method_table));
+                    }
+                }
+                if *ext > 0 {
+                    if let Ok(rb_classext_struct_21 {
+                        iv_tbl, const_tbl, ..
+                    }) = copy_struct(*ext, proc)
+                    {
+                        if iv_tbl as usize > 0 {
+                            if with_st_table_kvs(iv_tbl as usize, proc, |_key, val| {
+                                let addr = val as usize;
+                                if addr % RVALUE_BYTES == 0
+                                    && heap.iter().any(|p| p.deref(addr).is_some())
+                                {
+                                    refs.push(addr);
+                                }
+                            })
+                            .is_err()
+                            {
+                                dbg!(("Read failed", iv_tbl));
+                            }
+                        }
+
+                        if const_tbl as usize > 0 {
+                            if with_id_table_values(const_tbl as usize, proc, |val| {
+                                if let Ok(rb_const_entry_struct { value, file, .. }) =
+                                    copy_struct(val as usize, proc)
+                                {
+                                    if value % RVALUE_BYTES == 0
+                                        && heap.iter().any(|p| p.deref(value).is_some())
+                                    {
+                                        refs.push(value);
+                                    }
+                                    if file % RVALUE_BYTES == 0
+                                        && heap.iter().any(|p| p.deref(file).is_some())
+                                    {
+                                        refs.push(file);
+                                    }
+                                } else {
+                                    dbg!(("Read failed", val));
+                                }
+                            })
+                            .is_err()
+                            {
+                                dbg!(("Read failed", const_tbl));
+                            }
+                        }
+                    } else {
+                        dbg!(("Read failed", ext));
+                    }
+                }
+            }
+            _ => {}
+        }
+        refs
+    }
+
+    #[inline]
+    pub fn bytesize(&self, proc: &ProcessHandle) -> usize {
+        0
+    }
+}
+
+#[derive(Debug)]
 enum RValue {
     Free { next: usize },
     Object { klass: usize, data: ObjectData },
-    Class { klass: usize },
-    Module { klass: usize },
+    Class { klass: usize, data: ClassData },
     String { klass: usize, data: StringData },
     Array { klass: usize, data: ArrayData },
     Hash { klass: usize },
@@ -253,8 +472,10 @@ impl RValue {
                 klass: pointer,
                 data: ObjectData::from_rvalue(flags, data),
             },
-            Ok(Type::Class) => RValue::Class { klass: pointer },
-            Ok(Type::Module) => RValue::Module { klass: pointer },
+            Ok(Type::Class) | Ok(Type::Module) => RValue::Class {
+                klass: pointer,
+                data: ClassData::from_rvalue(flags, data),
+            },
             Ok(Type::String) => {
                 if let Ok(strdata) = StringData::from_rvalue(flags, data) {
                     RValue::String {
@@ -271,7 +492,7 @@ impl RValue {
             },
             Ok(Type::Hash) => RValue::Hash { klass: pointer },
             Ok(Type::Data) => RValue::Data { klass: pointer },
-            Ok(Type::IMemo) => RValue::IMemo,
+            Ok(Type::IMemo) | Ok(Type::IClass) => RValue::IMemo,
             Ok(t) => RValue::Other {
                 klass: pointer,
                 rbtype: t,
@@ -290,17 +511,23 @@ impl RValue {
 
     #[inline]
     pub fn references(&self, heap: &[HeapPage], proc: &ProcessHandle) -> Vec<usize> {
+        // TODO generic_ivar
         let mut refs = match self {
-            RValue::Free { .. } => Vec::new(),
+            RValue::Free { .. } | RValue::Invalid => Vec::new(),
             RValue::Object { klass, data } => {
-                let mut refs: Vec<usize> = data.references(heap, proc);
+                let mut refs = data.references(heap, proc);
                 if *klass > 0 {
                     refs.push(*klass);
                 }
                 refs
             }
-            RValue::Class { .. } => Vec::new(),
-            RValue::Module { .. } => Vec::new(),
+            RValue::Class { klass, data } => {
+                let mut refs = data.references(heap, proc);
+                if *klass > 0 {
+                    refs.push(*klass);
+                }
+                refs
+            }
             RValue::String { klass, .. } => {
                 let mut refs: Vec<usize> = Vec::new();
                 if *klass > 0 {
@@ -309,7 +536,7 @@ impl RValue {
                 refs
             }
             RValue::Array { klass, data } => {
-                let mut refs: Vec<usize> = data.references(heap, proc);
+                let mut refs = data.references(heap, proc);
                 if *klass > 0 {
                     refs.push(*klass);
                 }
@@ -319,7 +546,6 @@ impl RValue {
             RValue::Data { .. } => Vec::new(),
             RValue::IMemo => Vec::new(),
             RValue::Other { .. } => Vec::new(),
-            RValue::Invalid => Vec::new(),
         };
 
         refs.sort();
@@ -335,7 +561,6 @@ impl RValue {
             RValue::Free { next, .. } => *next == 0 || on_heap(*next),
             RValue::Object { klass, .. } => on_heap(*klass),
             RValue::Class { klass, .. } => *klass == 0 || on_heap(*klass), // There's exactly one class with a null `klass`, which I suspect is BasicObject
-            RValue::Module { klass, .. } => on_heap(*klass),
             // TODO Understand the zero special case
             RValue::String { klass, .. } => *klass == 0 || on_heap(*klass),
             RValue::Array { klass, .. } => *klass == 0 || on_heap(*klass),
@@ -360,7 +585,6 @@ impl RValue {
         match self {
             RValue::Object { .. } => "Object".to_string(),
             RValue::Class { .. } => "Class".to_string(),
-            RValue::Module { .. } => "Module".to_string(),
             RValue::String { .. } => "String".to_string(),
             RValue::Array { .. } => "Array".to_string(),
             RValue::Hash { .. } => "Hash".to_string(),
@@ -372,7 +596,7 @@ impl RValue {
     }
 
     #[inline]
-    pub fn bytesize(&self) -> usize {
+    pub fn bytesize(&self, proc: &ProcessHandle) -> usize {
         match self {
             RValue::Array {
                 data: ArrayData::Heap { len, .. },
@@ -386,6 +610,7 @@ impl RValue {
                 data: StringData::Heap { len, .. },
                 ..
             } => RVALUE_BYTES + *len,
+            RValue::Class { data, .. } => RVALUE_BYTES + data.bytesize(proc),
             _ => RVALUE_BYTES,
         }
     }
@@ -498,7 +723,7 @@ pub fn parse(pid: Pid) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
                     addr,
                     graph.add_node(Object {
                         address: addr,
-                        bytes: r.bytesize(),
+                        bytes: r.bytesize(&handle),
                         kind: r.kind(),
                         label: None,
                     }),
