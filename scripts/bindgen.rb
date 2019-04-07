@@ -18,23 +18,28 @@ class BindgenScript
 
   WRAPPER_CONTENTS = <<~HEADER
     #include <vm_core.h>
-    #include <iseq.h>
     #include <gc.h>
+    #include <id_table.h>
+    #include <constant.h>
   HEADER
 
   RUBY_C_TYPES = %w{
-    rb_iseq_constant_body
-    rb_iseq_location_struct
-    rb_thread_struct
-    rb_thread_t
-    rb_iseq_struct
-    rb_control_frame_struct
-    rb_thread_struct
-    rb_execution_context_struct
-    iseq_insn_info_entry
-    RString
     RArray
-    VALUE
+    RClass
+    rb_classext_struct
+    rb_const_entry_struct
+    RData
+    RObject
+    RString
+    RTypedData
+    rb_id_table
+    st_table
+  }
+
+  RUBY_C_FUNCTIONS = %w{
+    rb_id_table_foreach
+    rb_id_table_memsize
+    st_foreach
   }
 
   OUT_DIR = File.expand_path('../src/bindings', __dir__)
@@ -57,7 +62,11 @@ class BindgenScript
     Subprocess.check_call([
       'bindgen',
       '--impl-debug',
+      '--raw-line', '#![allow(non_upper_case_globals)]',
+      '--raw-line', '#![allow(non_camel_case_types)]',
+      '--raw-line', '#![allow(non_snake_case)]',
       *RUBY_C_TYPES.flat_map {|t| ['--whitelist-type', t]},
+      *RUBY_C_FUNCTIONS.flat_map {|f| ['--whitelist-function', f]},
       '-o', out_file,
       wrapper_h.to_path,
       '--',
@@ -81,7 +90,7 @@ class BindgenScript
       Subprocess.check_call(%w{sh configure}, cwd: ruby_dir)
     end
 
-    Subprocess.check_call(%w{make id.h}, cwd: ruby_dir)
+    # Subprocess.check_call(%w{make id.h}, cwd: ruby_dir)
 
     Subprocess.check_call(%w{rbenv install -s} << version_name)
 
@@ -99,7 +108,7 @@ class BindgenScript
   def main
     with_ruby_dir do |ruby_dir|
       RUBY_VERSIONS.each do |version|
-        out_file = File.join(OUT_DIR, version.join('_') + '.rs')
+        out_file = File.join(OUT_DIR, 'ruby_' + version.join('_') + '.rs')
         $stderr.puts("Generating #{out_file} ...")
         sys_headers_dir = setup_ruby(version, ruby_dir)
         run_bindgen(ruby_dir, sys_headers_dir, out_file)

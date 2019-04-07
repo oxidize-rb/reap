@@ -11,9 +11,12 @@ extern crate serde_json;
 extern crate timed_function;
 
 mod analyze;
+mod bindings;
+mod copy;
 mod object;
 mod parse;
-mod procmap; // TODO `proc` // TODO `json`
+#[cfg(target_pointer_width = "64")]
+mod procmap; // TODO `proc` // TODO `json` // TODO still compile without proc on 32-bit
 
 use crate::object::*;
 use bytesize::ByteSize;
