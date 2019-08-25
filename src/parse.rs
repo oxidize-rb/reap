@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::path::Path;
 use timed_function::timed;
 
 #[derive(Debug, Deserialize)]
@@ -104,7 +105,7 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
 }
 
 #[timed]
-pub fn parse(file: &str) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
+pub fn parse(file: &Path) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
 

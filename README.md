@@ -29,7 +29,7 @@ Run with `--help` for full documentation.
 Basic usage:
 
 ```sh
-$ cargo run -q --release -- /tmp/heap.json -d out.dot -n 3
+$ cargo run -q --release -- /tmp/heap.json -f flamegraph.svg -c 3
 Object types using the most live memory:
 Thread: 2.1 MB (40 objects)
 String: 462.6 KB (9235 objects)
@@ -54,13 +54,13 @@ String: 81.8 KB (1174 objects)
 ARRAY: 38.6 KB (298 objects)
 ...: 91.5 KB (1422 objects)
 
-Wrote 33 nodes & 32 edges to out.dot
+Wrote 15471 nodes to flamegraph.svg
 ```
 
 Dig into a subtree (in this case, the larger Thread):
 
 ```sh
-$ cargo run -q --release -- /tmp/heap.json -d out.dot -n 3 -r 0x7f83df87dc40
+$ cargo run -q --release -- /tmp/heap.json -d out.dot -c 3 -r 0x7f83df87dc40
 Object types using the most live memory:
 Thread: 1.0 MB (1 objects)
 Class: 1.6 KB (3 objects)

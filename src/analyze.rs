@@ -4,6 +4,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::Dfs;
 use petgraph::Graph;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::iter::Iterator;
 use timed_function::timed;
 
@@ -367,5 +368,39 @@ impl Analysis {
 
     pub fn dominated_totals(&self) -> Stats {
         self.subtree_sizes[&self.root]
+    }
+
+    // Produces valid input for inferno::flamegraph::from_lines
+    //
+    // The basic idea is that we treat every reachable byte as a sample.
+    pub fn flamegraph_lines(&self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(self.dominated_subgraph.node_count());
+
+        // Re-usable buffer
+        let mut ancestors: Vec<Index> = Vec::new();
+
+        for mut i in self.dominators.keys() {
+            let node = &self.dominated_subgraph[*i];
+
+            while let Some(d) = self.dominators.get(i) {
+                ancestors.push(*d);
+                i = d;
+            }
+
+            let mut line = String::new();
+            for d in ancestors.iter().rev() {
+                write!(line, "{}", self.dominated_subgraph[*d]).unwrap();
+                line.push_str(";");
+            }
+            ancestors.clear();
+
+            write!(line, "{}", node).unwrap();
+            line.push_str(" ");
+            write!(line, "{}", node.bytes).unwrap();
+
+            lines.push(line);
+        }
+
+        lines
     }
 }

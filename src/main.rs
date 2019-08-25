@@ -1,10 +1,10 @@
 extern crate bytesize;
-#[macro_use]
-extern crate clap;
+extern crate inferno;
 #[macro_use]
 extern crate serde;
 extern crate petgraph;
 extern crate serde_json;
+extern crate structopt;
 extern crate timed_function;
 
 mod analyze;
@@ -13,18 +13,34 @@ mod parse;
 
 use crate::object::*;
 use bytesize::ByteSize;
+use inferno::flamegraph;
 use petgraph::dot;
+use std::error;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::prelude::*;
+use std::path::{Path, PathBuf};
+use structopt::StructOpt;
 
-fn write_dot_file(graph: &ReferenceGraph, filename: &str) -> std::io::Result<()> {
+type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
+fn write_dot_file(graph: &ReferenceGraph, filename: &Path) -> Result<()> {
     let mut file = File::create(filename)?;
     write!(
         file,
         "{}",
         dot::Dot::with_config(&graph, &[dot::Config::EdgeNoLabel])
     )?;
+    Ok(())
+}
+
+fn write_flamegraph(lines: &[String], filename: &Path) -> Result<()> {
+    let mut opts = flamegraph::Options::default();
+    opts.direction = flamegraph::Direction::Inverted;
+    opts.count_name = "bytes".to_string();
+
+    let file = File::create(filename)?;
+    flamegraph::from_lines(&mut opts, lines.iter().map(|s| s.as_str()), file).unwrap();
     Ok(())
 }
 
@@ -52,7 +68,7 @@ fn print_largest<K: Display>(largest: &[(K, Stats)], rest: Stats) {
     }
 }
 
-fn parse(file: &str, rooted_at: Option<usize>) -> std::io::Result<analyze::Analysis> {
+fn parse(file: &Path, rooted_at: Option<usize>) -> std::io::Result<analyze::Analysis> {
     let (root, graph) = parse::parse(&file)?;
 
     let subgraph_root = rooted_at
@@ -67,68 +83,83 @@ fn parse(file: &str, rooted_at: Option<usize>) -> std::io::Result<analyze::Analy
     Ok(analyze::analyze(root, subgraph_root, graph))
 }
 
-fn main() -> std::io::Result<()> {
-    let args = clap_app!(reap =>
-        (version: "0.1")
-        (about: "A tool for parsing Ruby heap dumps.")
-        (@arg INPUT: +required "Path to JSON heap dump file")
-        (@arg DOT: -d --dot +takes_value "Dot file output for dominator tree")
-        (@arg ROOT: -r --root +takes_value "Filter to subtree rooted at object with this address")
-        (@arg THRESHOLD: -t --threshold +takes_value "Include nodes retaining at least this fraction of memory in dot output (defaults to 0.005)")
-        (@arg COUNT: -n --top-n +takes_value "Print this many of the types & objects retaining the most memory")
-    )
-    .get_matches();
+#[derive(StructOpt, Debug)]
+#[structopt(name = "reap")]
+struct Opt {
+    /// Path to JSON heap dump file to process
+    #[structopt(name = "INPUT", parse(from_os_str))]
+    input: PathBuf,
 
-    let input = args.value_of("INPUT").unwrap();
-    let dot_output = args.value_of("DOT");
-    let subtree_root = args
-        .value_of("ROOT")
-        .map(|r| parse::parse_address(r).expect("Invalid subtree root address"));
-    let relevance_threshold: f64 = args
-        .value_of("THRESHOLD")
-        .map(|t| t.parse().expect("Invalid relevance threshold"))
-        .unwrap_or(0.005);
-    let top_n: usize = args
-        .value_of("COUNT")
-        .map(|t| t.parse().expect("Invalid top-n count"))
-        .unwrap_or(10);
+    /// Filter to subtree rooted at object with this address
+    #[structopt(short, long)]
+    root: Option<String>,
 
-    let analysis = parse(&input, subtree_root)?;
+    /// Flamegraph SVG output for dominator tree
+    #[structopt(short, long, parse(from_os_str))]
+    flamegraph: Option<PathBuf>,
+
+    /// Dot file output for dominator tree
+    #[structopt(short, long, parse(from_os_str))]
+    dot: Option<PathBuf>,
+
+    /// Include nodes retaining at least this fraction of memory in dot output
+    #[structopt(short, long, default_value = "0.005")]
+    threshold: f64,
+
+    /// Print this many of the types & objects retaining the most memory
+    #[structopt(short, long, default_value = "10")]
+    count: usize,
+}
+
+fn main() -> Result<()> {
+    let opt = Opt::from_args();
+
+    let subtree_root = opt
+        .root
+        .map(|r| parse::parse_address(r.as_str()).expect("Invalid subtree root address"));
+
+    let analysis = parse(opt.input.as_path(), subtree_root)?;
     println!();
 
     println!("Object types using the most live memory:");
-    let (largest, rest) = analysis.live_stats_by_kind(top_n);
+    let (largest, rest) = analysis.live_stats_by_kind(opt.count);
     print_largest(&largest, rest);
 
     println!("\nObjects retaining the most live memory:");
-    let (largest, rest) = analysis.dominator_subtree_stats(top_n);
+    let (largest, rest) = analysis.dominator_subtree_stats(opt.count);
     print_largest(&largest, rest);
 
     println!("\nObject types retaining the most live memory:");
-    let (largest, rest) = analysis.retained_stats_by_kind(top_n);
+    let (largest, rest) = analysis.retained_stats_by_kind(opt.count);
     print_largest(&largest, rest);
 
     if subtree_root.is_none() {
         println!("\nObjects unreachable from root:");
-        let (largest, rest) = analysis.unreachable_stats_by_kind(top_n);
+        let (largest, rest) = analysis.unreachable_stats_by_kind(opt.count);
         print_largest(&largest, rest);
     } else {
         println!(
             "\nObjects reachable from, but not dominated by, {}:",
-            args.value_of("ROOT").unwrap()
+            subtree_root.unwrap(),
         );
-        let (largest, rest) = analysis.unreachable_stats_by_kind(top_n);
+        let (largest, rest) = analysis.unreachable_stats_by_kind(opt.count);
         print_largest(&largest, rest);
     }
 
-    if let Some(output) = dot_output {
-        let dom_graph = analysis.relevant_dominator_subgraph(relevance_threshold);
-        write_dot_file(&dom_graph, &output)?;
+    if let Some(output) = opt.flamegraph {
+        let lines = analysis.flamegraph_lines();
+        write_flamegraph(&lines, output.as_path())?;
+        println!("\nWrote {} nodes to {}", lines.len(), output.display());
+    }
+
+    if let Some(output) = opt.dot {
+        let dom_graph = analysis.relevant_dominator_subgraph(opt.threshold.abs());
+        write_dot_file(&dom_graph, output.as_path())?;
         println!(
             "\nWrote {} nodes & {} edges to {}",
             dom_graph.node_count(),
             dom_graph.edge_count(),
-            &output
+            output.display()
         );
     }
 
@@ -141,7 +172,7 @@ mod test {
 
     #[test]
     fn whole_heap() {
-        let analysis = parse("test/heap.json", None).unwrap();
+        let analysis = parse(Path::new("test/heap.json"), None).unwrap();
 
         let totals = analysis.dominated_totals();
         assert_eq!(15472, totals.count);
@@ -173,7 +204,7 @@ mod test {
 
     #[test]
     fn subtree() {
-        let analysis = parse("test/heap.json", Some(140204367666240)).unwrap();
+        let analysis = parse(Path::new("test/heap.json"), Some(140204367666240)).unwrap();
 
         let totals = analysis.dominated_totals();
         assert_eq!(25, totals.count);

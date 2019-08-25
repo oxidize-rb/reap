@@ -1,6 +1,6 @@
 [package]
 name = "reap"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["David Judd <david.a.judd@gmail.com>"]
 description = "A tool for parsing Ruby heap dumps"
 license = "Apache-2.0"
@@ -14,7 +14,8 @@ exclude = ["test/*"]
 
 [dependencies]
 bytesize = "1.0"
-clap = "2.0"
+structopt = "0.2"
+inferno = "0.8"
 petgraph = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
