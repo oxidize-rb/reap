@@ -44,6 +44,15 @@ fn write_flamegraph(lines: &[String], filename: &Path) -> Result<()> {
     Ok(())
 }
 
+fn write_folded(lines: &[String], filename: &Path) -> Result<()> {
+    let file = File::create(filename)?;
+    let mut writer = std::io::BufWriter::new(file);
+    for line in lines {
+        writeln!(writer, "{}", line)?;
+    }
+    Ok(())
+}
+
 fn print_largest<K: Display>(largest: &[(K, Stats)], rest: Stats) {
     if largest.is_empty() {
         println!("None");
@@ -97,6 +106,10 @@ struct Opt {
     /// Flamegraph SVG output for dominator tree
     #[structopt(short, long, parse(from_os_str))]
     flamegraph: Option<PathBuf>,
+
+    /// Folded stack output for dominator tree
+    #[structopt(long, parse(from_os_str))]
+    folded: Option<PathBuf>,
 
     /// Dot file output for dominator tree
     #[structopt(short, long, parse(from_os_str))]
@@ -152,6 +165,12 @@ fn main() -> Result<()> {
     if let Some(output) = opt.flamegraph {
         let lines = analysis.flamegraph_lines();
         write_flamegraph(&lines, output.as_path())?;
+        println!("\nWrote {} nodes to {}", lines.len(), output.display());
+    }
+
+    if let Some(output) = opt.folded {
+        let lines = analysis.flamegraph_lines();
+        write_folded(&lines, output.as_path())?;
         println!("\nWrote {} nodes to {}", lines.len(), output.display());
     }
 
