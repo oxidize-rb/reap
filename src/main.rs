@@ -112,6 +112,9 @@ struct Opt {
 }
 
 fn main() -> Result<()> {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    println!("reap v{}", VERSION);
+
     let opt = Opt::from_args();
 
     let subtree_root = opt
