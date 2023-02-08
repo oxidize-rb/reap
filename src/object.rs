@@ -49,6 +49,19 @@ impl Object {
         ));
         clone
     }
+
+    pub fn format(&self, trimmed:bool) -> String {
+        if let Some(ref label) = self.label {
+           return format!("{}", label)
+        } else {
+            if trimmed {
+                self.kind.clone()
+            } else {
+                format!("{}[{:#x}]", self.kind, self.address)
+            }
+        }
+    }
+    
 }
 
 impl PartialEq for Object {

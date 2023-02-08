@@ -373,7 +373,7 @@ impl Analysis {
     // Produces valid input for inferno::flamegraph::from_lines
     //
     // The basic idea is that we treat every reachable byte as a sample.
-    pub fn flamegraph_lines(&self) -> Vec<String> {
+    pub fn flamegraph_lines(&self, trimmed:bool) -> Vec<String> {
         let mut lines = Vec::with_capacity(self.dominated_subgraph.node_count());
 
         // Re-usable buffer
@@ -389,12 +389,12 @@ impl Analysis {
 
             let mut line = String::new();
             for d in ancestors.iter().rev() {
-                write!(line, "{}", self.dominated_subgraph[*d]).unwrap();
+                write!(line, "{}", self.dominated_subgraph[*d].format(trimmed)).unwrap();
                 line.push_str(";");
             }
             ancestors.clear();
 
-            write!(line, "{}", node).unwrap();
+            write!(line, "{}", node.format(trimmed)).unwrap();
             line.push_str(" ");
             write!(line, "{}", node.bytes).unwrap();
 
