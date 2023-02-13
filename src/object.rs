@@ -50,11 +50,11 @@ impl Object {
         clone
     }
 
-    pub fn format(&self, trimmed:bool) -> String {
+    pub fn format(&self, class_name_only:bool) -> String {
         if let Some(ref label) = self.label {
            return format!("{}", label)
         } else {
-            if trimmed {
+            if class_name_only {
                 self.kind.clone()
             } else {
                 format!("{}[{:#x}]", self.kind, self.address)

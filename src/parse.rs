@@ -35,7 +35,7 @@ struct ParsedLine {
 }
 
 impl Line { 
-    pub fn parse(self, trimmed: bool) -> Option<ParsedLine> {
+    pub fn parse(self, class_name_only: bool) -> Option<ParsedLine> {
         let mut object = Object {
             address: self
                 .address
@@ -51,7 +51,7 @@ impl Line {
             return None;
         }
 
-        if !trimmed {
+        if !class_name_only {
             object.label = match object.kind.as_str() {
                 "CLASS" | "MODULE" | "ICLASS" =>  self
                     .name
@@ -93,11 +93,8 @@ impl Line {
                     .name
                     .clone()
                     .map(|n| format!("{}[{}]", n,  object.kind)),
-                "ARRAY" => Some(format!(
-                    "Array[{:#x}][len={}]",
-                    object.address, self.length?
-                )),
-                "HASH" =>  Some(format!("Hash[size={}]", self.size?)),
+                "ARRAY" => Some(String::from("Array")),
+                "HASH" =>  Some(String::from("Hash")),
                 "STRING" => Some(String::from("String")),
                 _ => None 
             } 
@@ -120,7 +117,7 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
 }
 
 #[timed]
-pub fn parse(file: &Path, trimmed: bool) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
+pub fn parse(file: &Path, class_name_only: bool) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
 
@@ -139,7 +136,7 @@ pub fn parse(file: &Path, trimmed: bool) -> std::io::Result<(NodeIndex<usize>, R
     for line in reader.lines().map(Result::unwrap) {
         let parsed = serde_json::from_str::<Line>(&line)
             .expect(&line)
-            .parse(trimmed)
+            .parse(class_name_only)
             .expect(&line);
 
         if parsed.object.is_root() {
