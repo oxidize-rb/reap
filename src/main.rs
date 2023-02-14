@@ -82,7 +82,7 @@ fn parse(
     rooted_at: Option<usize>,
     class_name_only: bool,
 ) -> std::io::Result<analyze::Analysis> {
-    let (root, graph) = parse::parse(&file, class_name_only)?;
+    let (root, graph) = parse::parse(file, class_name_only)?;
 
     let subgraph_root = rooted_at
         .map(|address| {

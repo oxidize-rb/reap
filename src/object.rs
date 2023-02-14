@@ -52,13 +52,11 @@ impl Object {
 
     pub fn format(&self, class_name_only: bool) -> String {
         if let Some(ref label) = self.label {
-            return format!("{}", label);
+            label.to_string()
+        } else if class_name_only {
+            self.kind.clone()
         } else {
-            if class_name_only {
-                self.kind.clone()
-            } else {
-                format!("{}[{:#x}]", self.kind, self.address)
-            }
+            format!("{}[{:#x}]", self.kind, self.address)
         }
     }
 }

@@ -59,7 +59,7 @@ pub fn analyze(
         rest,
         dominators,
         subtree_sizes,
-        class_name_only: class_name_only,
+        class_name_only,
     }
 }
 
@@ -250,8 +250,8 @@ fn map_indices(
     let mapped_edges = {
         let mut mapped_edges: HashMap<Index, Index> = HashMap::new();
         for (a, d) in addr_edges {
-            let i = index_by_addr[&a];
-            let j = index_by_addr[&d];
+            let i = index_by_addr[a];
+            let j = index_by_addr[d];
             mapped_edges.insert(i, j);
         }
         mapped_edges
@@ -368,7 +368,7 @@ impl Analysis {
 
         for (old, new) in old_to_new.iter() {
             if let Some(d) = self.dominators.get(old) {
-                subgraph.add_edge(old_to_new[&d], *new, EDGE_WEIGHT);
+                subgraph.add_edge(old_to_new[d], *new, EDGE_WEIGHT);
             }
         }
 
@@ -404,12 +404,12 @@ impl Analysis {
                     self.dominated_subgraph[*d].format(self.class_name_only)
                 )
                 .unwrap();
-                line.push_str(";");
+                line.push(';');
             }
             ancestors.clear();
 
             write!(line, "{}", node.format(self.class_name_only)).unwrap();
-            line.push_str(" ");
+            line.push(' ');
             write!(line, "{}", node.bytes).unwrap();
 
             lines.push(line);
