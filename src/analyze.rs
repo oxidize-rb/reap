@@ -37,7 +37,12 @@ pub struct Analysis {
 }
 
 #[timed]
-pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph, class_name_only:bool) -> Analysis {
+pub fn analyze(
+    orig_root: Index,
+    subgraph_root: Index,
+    graph: ReferenceGraph,
+    class_name_only: bool,
+) -> Analysis {
     let dominators = find_dominators(orig_root, &graph);
 
     let (root, dominated_subgraph, rest, dominators) = if subgraph_root == orig_root {
@@ -54,7 +59,7 @@ pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph, cl
         rest,
         dominators,
         subtree_sizes,
-        class_name_only: class_name_only
+        class_name_only: class_name_only,
     }
 }
 
@@ -393,7 +398,12 @@ impl Analysis {
 
             let mut line = String::new();
             for d in ancestors.iter().rev() {
-                write!(line, "{}", self.dominated_subgraph[*d].format(self.class_name_only)).unwrap();
+                write!(
+                    line,
+                    "{}",
+                    self.dominated_subgraph[*d].format(self.class_name_only)
+                )
+                .unwrap();
                 line.push_str(";");
             }
             ancestors.clear();

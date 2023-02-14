@@ -50,9 +50,9 @@ impl Object {
         clone
     }
 
-    pub fn format(&self, class_name_only:bool) -> String {
+    pub fn format(&self, class_name_only: bool) -> String {
         if let Some(ref label) = self.label {
-           return format!("{}", label)
+            return format!("{}", label);
         } else {
             if class_name_only {
                 self.kind.clone()
@@ -61,7 +61,6 @@ impl Object {
             }
         }
     }
-    
 }
 
 impl PartialEq for Object {

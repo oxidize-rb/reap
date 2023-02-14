@@ -77,7 +77,11 @@ fn print_largest<K: Display>(largest: &[(K, Stats)], rest: Stats) {
     }
 }
 
-fn parse(file: &Path, rooted_at: Option<usize>, class_name_only:bool) -> std::io::Result<analyze::Analysis> {
+fn parse(
+    file: &Path,
+    rooted_at: Option<usize>,
+    class_name_only: bool,
+) -> std::io::Result<analyze::Analysis> {
     let (root, graph) = parse::parse(&file, class_name_only)?;
 
     let subgraph_root = rooted_at
@@ -89,7 +93,12 @@ fn parse(file: &Path, rooted_at: Option<usize>, class_name_only:bool) -> std::io
         })
         .unwrap_or(root);
 
-    Ok(analyze::analyze(root, subgraph_root, graph, class_name_only))
+    Ok(analyze::analyze(
+        root,
+        subgraph_root,
+        graph,
+        class_name_only,
+    ))
 }
 
 #[derive(StructOpt, Debug)]
@@ -123,9 +132,9 @@ struct Opt {
     #[structopt(short, long, default_value = "10")]
     count: usize,
 
-     /// Remove address from flamegraph labels
-     #[structopt(long="class-name-only")]
-     class_name_only:bool,
+    /// Remove address from flamegraph labels
+    #[structopt(long = "class-name-only")]
+    class_name_only: bool,
 }
 
 fn main() -> Result<()> {
@@ -139,7 +148,7 @@ fn main() -> Result<()> {
         .map(|r| parse::parse_address(r.as_str()).expect("Invalid subtree root address"));
 
     let class_name_only = opt.class_name_only;
-   
+
     let analysis = parse(opt.input.as_path(), subtree_root, class_name_only)?;
     println!();
 
@@ -201,7 +210,7 @@ mod test {
     #[rstest]
     #[case(false)]
     #[case(true)]
-    fn whole_heap(#[case] class_name_only:bool) {
+    fn whole_heap(#[case] class_name_only: bool) {
         let analysis = parse(Path::new("test/heap.json"), None, class_name_only).unwrap();
 
         let totals = analysis.dominated_totals();
@@ -235,8 +244,13 @@ mod test {
     #[rstest]
     #[case(false)]
     #[case(true)]
-    fn subtree(#[case] class_name_only:bool) {
-        let analysis = parse(Path::new("test/heap.json"), Some(140204367666240), class_name_only).unwrap();
+    fn subtree(#[case] class_name_only: bool) {
+        let analysis = parse(
+            Path::new("test/heap.json"),
+            Some(140204367666240),
+            class_name_only,
+        )
+        .unwrap();
 
         let totals = analysis.dominated_totals();
         assert_eq!(25, totals.count);
@@ -269,7 +283,7 @@ mod test {
     #[rstest]
     #[case(false)]
     #[case(true)]
-    fn flamegraph_lines_output(#[case] class_name_only:bool) {
+    fn flamegraph_lines_output(#[case] class_name_only: bool) {
         let analysis = parse(Path::new("test/heap.json"), None, class_name_only).unwrap();
         let frame_lines = analysis.flamegraph_lines();
         let lines_with_memory_addresses = frame_lines.iter().filter(|&l| l.contains("0x")).count();

@@ -34,7 +34,7 @@ struct ParsedLine {
     name: Option<String>,
 }
 
-impl Line { 
+impl Line {
     pub fn parse(self, class_name_only: bool) -> Option<ParsedLine> {
         let mut object = Object {
             address: self
@@ -53,7 +53,7 @@ impl Line {
 
         if !class_name_only {
             object.label = match object.kind.as_str() {
-                "CLASS" | "MODULE" | "ICLASS" =>  self
+                "CLASS" | "MODULE" | "ICLASS" => self
                     .name
                     .clone()
                     .map(|n| format!("{}[{:#x}][{}]", n, object.address, object.kind)),
@@ -61,8 +61,8 @@ impl Line {
                     "Array[{:#x}][len={}]",
                     object.address, self.length?
                 )),
-                "HASH" =>  Some(format!("Hash[{:#x}][size={}]", object.address, self.size?)),
-                "STRING" =>  self.value.as_ref().map(|v| {
+                "HASH" => Some(format!("Hash[{:#x}][size={}]", object.address, self.size?)),
+                "STRING" => self.value.as_ref().map(|v| {
                     let prefix = v
                         .chars()
                         .take(40)
@@ -84,20 +84,18 @@ impl Line {
                     };
                     format!("String[{:#x}][{}{}]", object.address, prefix, ellipsis)
                 }),
-                _ => None 
+                _ => None,
             }
-        }
-        else {
-           object.label= match object.kind.as_str() {
-                "CLASS" | "MODULE" | "ICLASS" => self
-                    .name
-                    .clone()
-                    .map(|n| format!("{}[{}]", n,  object.kind)),
+        } else {
+            object.label = match object.kind.as_str() {
+                "CLASS" | "MODULE" | "ICLASS" => {
+                    self.name.clone().map(|n| format!("{}[{}]", n, object.kind))
+                }
                 "ARRAY" => Some(String::from("Array")),
-                "HASH" =>  Some(String::from("Hash")),
+                "HASH" => Some(String::from("Hash")),
                 "STRING" => Some(String::from("String")),
-                _ => None 
-            } 
+                _ => None,
+            }
         }
         Some(ParsedLine {
             references: self
@@ -117,7 +115,10 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
 }
 
 #[timed]
-pub fn parse(file: &Path, class_name_only: bool) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
+pub fn parse(
+    file: &Path,
+    class_name_only: bool,
+) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
 
