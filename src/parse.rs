@@ -20,7 +20,6 @@ struct Line {
     object_type: String,
 
     class: Option<String>,
-    root: Option<String>,
     name: Option<String>,
     length: Option<usize>,
     size: Option<usize>,
@@ -35,8 +34,8 @@ struct ParsedLine {
     name: Option<String>,
 }
 
-impl Line {
-    pub fn parse(self) -> Option<ParsedLine> {
+impl Line { 
+    pub fn parse(self, class_name_only: bool) -> Option<ParsedLine> {
         let mut object = Object {
             address: self
                 .address
@@ -52,41 +51,54 @@ impl Line {
             return None;
         }
 
-        object.label = match object.kind.as_str() {
-            "CLASS" | "MODULE" | "ICLASS" => self
-                .name
-                .clone()
-                .map(|n| format!("{}[{:#x}][{}]", n, object.address, object.kind)),
-            "ARRAY" => Some(format!(
-                "Array[{:#x}][len={}]",
-                object.address, self.length?
-            )),
-            "HASH" => Some(format!("Hash[{:#x}][size={}]", object.address, self.size?)),
-            "STRING" => self.value.map(|v| {
-                let prefix = v
-                    .chars()
-                    .take(40)
-                    .flat_map(|c| {
-                        // Hacky escape to prevent dot format from breaking
-                        if c.is_control() {
-                            None
-                        } else if c == '\\' {
-                            Some('﹨')
-                        } else {
-                            Some(c)
-                        }
-                    })
-                    .collect::<String>();
-                let ellipsis = if v.chars().nth(41).is_some() {
-                    "…"
-                } else {
-                    ""
-                };
-                format!("String[{:#x}][{}{}]", object.address, prefix, ellipsis)
-            }),
-            _ => None,
-        };
-
+        if !class_name_only {
+            object.label = match object.kind.as_str() {
+                "CLASS" | "MODULE" | "ICLASS" =>  self
+                    .name
+                    .clone()
+                    .map(|n| format!("{}[{:#x}][{}]", n, object.address, object.kind)),
+                "ARRAY" => Some(format!(
+                    "Array[{:#x}][len={}]",
+                    object.address, self.length?
+                )),
+                "HASH" =>  Some(format!("Hash[{:#x}][size={}]", object.address, self.size?)),
+                "STRING" =>  self.value.as_ref().map(|v| {
+                    let prefix = v
+                        .chars()
+                        .take(40)
+                        .flat_map(|c| {
+                            // Hacky escape to prevent dot format from breaking
+                            if c.is_control() {
+                                None
+                            } else if c == '\\' {
+                                Some('﹨')
+                            } else {
+                                Some(c)
+                            }
+                        })
+                        .collect::<String>();
+                    let ellipsis = if v.chars().nth(41).is_some() {
+                        "…"
+                    } else {
+                        ""
+                    };
+                    format!("String[{:#x}][{}{}]", object.address, prefix, ellipsis)
+                }),
+                _ => None 
+            }
+        }
+        else {
+           object.label= match object.kind.as_str() {
+                "CLASS" | "MODULE" | "ICLASS" => self
+                    .name
+                    .clone()
+                    .map(|n| format!("{}[{}]", n,  object.kind)),
+                "ARRAY" => Some(String::from("Array")),
+                "HASH" =>  Some(String::from("Hash")),
+                "STRING" => Some(String::from("String")),
+                _ => None 
+            } 
+        }
         Some(ParsedLine {
             references: self
                 .references
@@ -105,7 +117,7 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
 }
 
 #[timed]
-pub fn parse(file: &Path) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
+pub fn parse(file: &Path, class_name_only: bool) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
 
@@ -124,7 +136,7 @@ pub fn parse(file: &Path) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)>
     for line in reader.lines().map(Result::unwrap) {
         let parsed = serde_json::from_str::<Line>(&line)
             .expect(&line)
-            .parse()
+            .parse(class_name_only)
             .expect(&line);
 
         if parsed.object.is_root() {

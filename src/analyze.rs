@@ -31,10 +31,13 @@ pub struct Analysis {
 
     // Size of each dominator subtree.
     subtree_sizes: HashMap<Index, Stats>,
+
+    // output only class names in flamegraph
+    class_name_only: bool,
 }
 
 #[timed]
-pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph) -> Analysis {
+pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph, class_name_only:bool) -> Analysis {
     let dominators = find_dominators(orig_root, &graph);
 
     let (root, dominated_subgraph, rest, dominators) = if subgraph_root == orig_root {
@@ -51,6 +54,7 @@ pub fn analyze(orig_root: Index, subgraph_root: Index, graph: ReferenceGraph) ->
         rest,
         dominators,
         subtree_sizes,
+        class_name_only: class_name_only
     }
 }
 
@@ -389,12 +393,12 @@ impl Analysis {
 
             let mut line = String::new();
             for d in ancestors.iter().rev() {
-                write!(line, "{}", self.dominated_subgraph[*d]).unwrap();
+                write!(line, "{}", self.dominated_subgraph[*d].format(self.class_name_only)).unwrap();
                 line.push_str(";");
             }
             ancestors.clear();
 
-            write!(line, "{}", node).unwrap();
+            write!(line, "{}", node.format(self.class_name_only)).unwrap();
             line.push_str(" ");
             write!(line, "{}", node.bytes).unwrap();
 
