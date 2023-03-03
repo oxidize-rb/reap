@@ -1,0 +1,2 @@
+{"type":"ROOT", "root":"vm", "references":["0x7f83e10bbff0"]}
+{"address":"0x7f83e10bbff0", "type":"STRING", "class":"0x7f83df8cfc48", "embedded":true, "bytesize":3, "value":"ÿÿÿ", "memsize":40, "flags":{"wb_protected":true}}

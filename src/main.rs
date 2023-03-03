@@ -293,4 +293,17 @@ mod test {
             assert_eq!(lines_with_memory_addresses, frame_lines.len());
         }
     }
+
+    #[rstest]
+    fn handles_invalid_utf8() {
+        let analysis = parse(Path::new("test/invalid-utf8.json"), None, false).unwrap();
+
+        let totals = analysis.dominated_totals();
+        assert_eq!(2, totals.count);
+        assert_eq!(40, totals.bytes);
+
+        let dom_graph = analysis.relevant_dominator_subgraph(0.005);
+        assert_eq!(2, dom_graph.node_count());
+        assert_eq!(1, dom_graph.edge_count());
+    }
 }
