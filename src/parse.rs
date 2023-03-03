@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::Path;
+use std::str;
 use timed_function::timed;
 
 #[derive(Debug, Deserialize)]
@@ -120,7 +121,7 @@ pub fn parse(
     class_name_only: bool,
 ) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
     let file = File::open(file)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut graph: ReferenceGraph = Graph::default();
     let mut indices: HashMap<usize, NodeIndex<usize>> = HashMap::new();
@@ -134,7 +135,15 @@ pub fn parse(
     indices.insert(root_address, root_index);
     references.insert(root_address, Vec::new());
 
-    for line in reader.lines().map(Result::unwrap) {
+    let mut line_buffer = vec![];
+
+    while let Ok(bytes_read) = reader.read_until(0x0A, &mut line_buffer) {
+        if bytes_read <= 0 {
+            break;
+        }
+
+        let line = String::from_utf8_lossy(&line_buffer);
+
         let parsed = serde_json::from_str::<Line>(&line)
             .expect(&line)
             .parse(class_name_only)
@@ -157,6 +166,8 @@ pub fn parse(
                 names.insert(address, name);
             }
         }
+
+        line_buffer.clear();
     }
 
     for (node, successors) in references {
