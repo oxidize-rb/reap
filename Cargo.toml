@@ -1,6 +1,6 @@
 [package]
 name = "reap"
-version = "0.3.2"
+version = "0.3.3"
 authors = ["David Judd <david.a.judd@gmail.com>"]
 description = "A tool for parsing Ruby heap dumps"
 license = "Apache-2.0"

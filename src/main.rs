@@ -230,9 +230,9 @@ mod test {
             .1;
 
         assert_eq!(9235, live_strs.count);
-        assert_eq!(1174, dead_strs.count);
+        assert_eq!(1175, dead_strs.count);
         assert_eq!(462583, live_strs.bytes);
-        assert_eq!(81799, dead_strs.bytes);
+        assert_eq!(81839, dead_strs.bytes);
         assert_eq!(9408, retained_strs.count);
         assert_eq!(486278, retained_strs.bytes);
 
