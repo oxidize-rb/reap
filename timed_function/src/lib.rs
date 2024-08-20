@@ -36,6 +36,7 @@ pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let funcname = &input.ident;
+    let generics = &input.decl.generics;
     let attributes = &input.attrs;
     let vis = &input.vis;
     let constness = &input.constness;
@@ -47,7 +48,7 @@ pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
 
     quote!(
         #(#attributes),*
-        #vis #constness #unsafety #abi fn #funcname (#(#args),*) #output {
+        #vis #constness #unsafety #abi fn #funcname#generics (#(#args),*) #output {
             use std::time::{Duration, Instant};
 
             let start = Instant::now();
