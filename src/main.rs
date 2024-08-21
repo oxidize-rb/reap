@@ -19,6 +19,7 @@ use std::error;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
@@ -82,7 +83,9 @@ fn parse(
     rooted_at: Option<usize>,
     class_name_only: bool,
 ) -> std::io::Result<analyze::Analysis> {
-    let (root, graph) = parse::parse(file, class_name_only)?;
+    let file = File::open(file)?;
+    let mut reader = BufReader::new(file);
+    let (root, graph) = parse::parse(&mut reader, class_name_only)?;
 
     let subgraph_root = rooted_at
         .map(|address| {
