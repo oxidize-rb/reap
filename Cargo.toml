@@ -4,7 +4,7 @@ version = "0.3.3"
 authors = ["David Judd <david.a.judd@gmail.com>"]
 description = "A tool for parsing Ruby heap dumps"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
 
 homepage = "https://github.com/djudd/reap"
 repository = "https://github.com/djudd/reap"
