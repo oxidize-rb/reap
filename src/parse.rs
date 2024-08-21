@@ -3,7 +3,8 @@ use petgraph::graph::NodeIndex;
 use petgraph::Graph;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::BufRead;
+use std::fmt;
+use std::io::{self, BufRead};
 use std::str;
 use timed_function::timed;
 
@@ -32,6 +33,25 @@ struct ParsedLine {
     module: Option<usize>,
     name: Option<String>,
 }
+
+#[derive(Debug)]
+pub enum ParseError {
+    IoError(io::Error),
+    JsonError(serde_json::Error),
+    InvalidLine(String),
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::IoError(err) => write!(f, "IO error: {}", err),
+            ParseError::JsonError(err) => write!(f, "JSON error: {}", err),
+            ParseError::InvalidLine(line) => write!(f, "Invalid line: {}", line),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
 
 impl Line {
     pub fn parse(self, class_name_only: bool) -> Option<ParsedLine> {
@@ -117,7 +137,7 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
 pub fn parse<R: BufRead>(
     reader: &mut R,
     class_name_only: bool,
-) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
+) -> Result<(NodeIndex<usize>, ReferenceGraph), ParseError> {
     let mut graph: ReferenceGraph = Graph::default();
     let mut indices: HashMap<usize, NodeIndex<usize>> = HashMap::new();
     let mut references: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -137,28 +157,40 @@ pub fn parse<R: BufRead>(
             break;
         }
 
-        let line = String::from_utf8_lossy(&line_buffer);
+        let line = String::from_utf8_lossy(&line_buffer).to_string();
 
-        let parsed = serde_json::from_str::<Line>(&line)
-            .expect(&line)
+        let parsed: Result<ParsedLine, ParseError> = serde_json::from_str::<Line>(&line)
+            .map_err(ParseError::JsonError)?
             .parse(class_name_only)
-            .expect(&line);
+            .ok_or_else(|| ParseError::InvalidLine(line.clone()));
 
-        if parsed.object.is_root() {
-            let refs = references.get_mut(&root_address).unwrap();
-            refs.extend_from_slice(parsed.references.as_slice());
-        } else {
-            let address = parsed.object.address;
-            indices.insert(address, graph.add_node(parsed.object));
+        match parsed {
+            Ok(parsed) => {
+                if parsed.object.is_root() {
+                    let refs = references.get_mut(&root_address).ok_or_else(|| {
+                        ParseError::InvalidLine(format!(
+                            "Root address {} not found in references",
+                            root_address
+                        ))
+                    })?;
+                    refs.extend_from_slice(parsed.references.as_slice());
+                } else {
+                    let address = parsed.object.address;
+                    indices.insert(address, graph.add_node(parsed.object));
 
-            if !parsed.references.is_empty() {
-                references.insert(address, parsed.references);
+                    if !parsed.references.is_empty() {
+                        references.insert(address, parsed.references);
+                    }
+                    if let Some(module) = parsed.module {
+                        instances.insert(address, module);
+                    }
+                    if let Some(name) = parsed.name {
+                        names.insert(address, name);
+                    }
+                }
             }
-            if let Some(module) = parsed.module {
-                instances.insert(address, module);
-            }
-            if let Some(name) = parsed.name {
-                names.insert(address, name);
+            Err(e) => {
+                return Err(e);
             }
         }
 
