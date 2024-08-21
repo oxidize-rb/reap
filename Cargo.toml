@@ -24,5 +24,9 @@ timed_function = { version = "0.1", path = "timed_function" }
 [dev-dependencies]
 rstest = "0.16.0"
 
+[features]
+timed = ["timed_function/timed"]
+default = ["timed"]
+
 [[bin]]
 name = "reap"
