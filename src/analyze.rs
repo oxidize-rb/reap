@@ -37,6 +37,8 @@ pub struct Analysis {
     class_name_only: bool,
 }
 
+type AnalysisResultType = (Index, ReferenceGraph, Vec<Object>, HashMap<Index, Index>);
+
 #[derive(Debug)]
 pub enum AnalysisError {
     NodeCountMismatch,
@@ -103,7 +105,7 @@ fn remove_unreachable(
     root: Index,
     graph: &ReferenceGraph,
     dominators: &HashMap<Index, Index>,
-) -> Result<(Index, ReferenceGraph, Vec<Object>, HashMap<Index, Index>), AnalysisError> {
+) -> Result<AnalysisResultType, AnalysisError> {
     // We take advantage of the fact that all reachable nodes have a dominator
     // to traverse the graph just once while both sorting reachable/unreachable
     // and translating domination edges into address terms
@@ -147,7 +149,7 @@ fn extract_dominated_subgraph(
     root: Index,
     graph: &ReferenceGraph,
     dominators: &HashMap<Index, Index>,
-) -> Result<(Index, ReferenceGraph, Vec<Object>, HashMap<Index, Index>), AnalysisError> {
+) -> Result<AnalysisResultType, AnalysisError> {
     let reachable = find_reachable_indices(root, graph);
     let dominator_addrs = find_addrs_of_filtered_edges(root, &reachable, dominators, graph);
 
@@ -319,7 +321,7 @@ fn largest_and_rest<'a, K, I: Iterator<Item = (&'a K, Stats)>>(
 ) -> (Vec<(&'a K, Stats)>, Stats) {
     let sorted = {
         let mut vec: Vec<(&'a K, Stats)> = iter.collect();
-        vec.sort_unstable_by_key(|(_, c)| usize::max_value() - c.bytes);
+        vec.sort_unstable_by_key(|(_, c)| usize::MAX - c.bytes);
         vec
     };
 
