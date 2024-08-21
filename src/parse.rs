@@ -1,6 +1,7 @@
 use crate::object::*;
 use petgraph::graph::NodeIndex;
 use petgraph::Graph;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::str;

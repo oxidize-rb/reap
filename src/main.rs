@@ -1,7 +1,5 @@
 extern crate bytesize;
 extern crate inferno;
-#[macro_use]
-extern crate serde;
 extern crate petgraph;
 extern crate serde_json;
 extern crate structopt;
