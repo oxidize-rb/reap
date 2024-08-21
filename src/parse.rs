@@ -174,7 +174,7 @@ pub fn parse<R: BufRead>(
         }
     }
 
-    for mut obj in graph.node_weights_mut() {
+    for obj in graph.node_weights_mut() {
         if let Some(module) = instances.get(&obj.address) {
             if let Some(name) = names.get(module) {
                 obj.kind = name.to_owned();
