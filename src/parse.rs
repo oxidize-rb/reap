@@ -4,7 +4,7 @@ use petgraph::Graph;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, BufRead};
+use std::io::BufRead;
 use std::str;
 use timed_function::timed;
 
@@ -36,7 +36,6 @@ struct ParsedLine {
 
 #[derive(Debug)]
 pub enum ParseError {
-    IoError(io::Error),
     JsonError(serde_json::Error),
     InvalidLine(String),
 }
@@ -44,7 +43,6 @@ pub enum ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::IoError(err) => write!(f, "IO error: {}", err),
             ParseError::JsonError(err) => write!(f, "JSON error: {}", err),
             ParseError::InvalidLine(line) => write!(f, "Invalid line: {}", line),
         }
@@ -153,7 +151,7 @@ pub fn parse<R: BufRead>(
     let mut line_buffer = vec![];
 
     while let Ok(bytes_read) = reader.read_until(0x0A, &mut line_buffer) {
-        if bytes_read <= 0 {
+        if bytes_read == 0 {
             break;
         }
 
