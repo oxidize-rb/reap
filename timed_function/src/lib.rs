@@ -5,18 +5,24 @@ extern crate quote;
 extern crate syn;
 
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{
-    parse_macro_input,
-    FnArg,
-    ItemFn,
-};
 
 #[proc_macro_attribute]
+#[cfg(not(feature = "timed"))]
+// no-op implementation of macro for when feature is disabled
+pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
+    // Return the item as is when the feature is not enabled
+    item
+}
+
+#[proc_macro_attribute]
+#[cfg(feature = "timed")]
 /// Macro for wrapping functions with timing.
 ///
 /// ~Cargo-culted from https://github.com/Manishearth/rust-adorn/blob/master/src/lib.rs
 pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
+    use quote::quote;
+    use syn::{parse_macro_input, FnArg, ItemFn};
+
     let input = parse_macro_input!(item as ItemFn);
 
     if input.decl.generics.where_clause.is_some() {
@@ -31,11 +37,12 @@ pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
                 let pat = &cap.pat;
                 args.push(quote!(#pat: #ty));
             }
-             _ => panic!()
+            _ => panic!(),
         }
     }
 
     let funcname = &input.ident;
+    let generics = &input.decl.generics;
     let attributes = &input.attrs;
     let vis = &input.vis;
     let constness = &input.constness;
@@ -47,7 +54,7 @@ pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
 
     quote!(
         #(#attributes),*
-        #vis #constness #unsafety #abi fn #funcname (#(#args),*) #output {
+        #vis #constness #unsafety #abi fn #funcname#generics (#(#args),*) #output {
             use std::time::{Duration, Instant};
 
             let start = Instant::now();
@@ -57,6 +64,6 @@ pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
 
             result
         }
-    ).into()
+    )
+    .into()
 }
-

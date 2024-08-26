@@ -1,11 +1,9 @@
 use crate::object::*;
 use petgraph::graph::NodeIndex;
 use petgraph::Graph;
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
-use std::path::Path;
+use std::io::BufRead;
 use std::str;
 use timed_function::timed;
 
@@ -116,13 +114,10 @@ pub fn parse_address(addr: &str) -> Result<usize, std::num::ParseIntError> {
 }
 
 #[timed]
-pub fn parse(
-    file: &Path,
+pub fn parse<R: BufRead>(
+    reader: &mut R,
     class_name_only: bool,
 ) -> std::io::Result<(NodeIndex<usize>, ReferenceGraph)> {
-    let file = File::open(file)?;
-    let mut reader = BufReader::new(file);
-
     let mut graph: ReferenceGraph = Graph::default();
     let mut indices: HashMap<usize, NodeIndex<usize>> = HashMap::new();
     let mut references: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -179,7 +174,7 @@ pub fn parse(
         }
     }
 
-    for mut obj in graph.node_weights_mut() {
+    for obj in graph.node_weights_mut() {
         if let Some(module) = instances.get(&obj.address) {
             if let Some(name) = names.get(module) {
                 obj.kind = name.to_owned();
@@ -188,4 +183,63 @@ pub fn parse(
     }
 
     Ok((root_index, graph))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use rstest::rstest;
+    use std::fs::File;
+    use std::io::{BufReader, Cursor};
+    use std::path::Path;
+
+    #[derive(Default)]
+    struct TestInput {
+        input_file: String,
+        input_buffer: Cursor<Vec<u8>>,
+        class_name_only: bool,
+    }
+
+    #[rstest]
+    #[case::it_accepts_a_file_as_input(
+        TestInput {
+            input_file: "test/heap.json".to_string(),
+            ..Default::default()
+        },
+    )]
+    #[case::it_accepts_a_file_as_input_with_class_names_only(
+        TestInput {
+            input_file: "test/heap.json".to_string(),
+            class_name_only: true,
+            ..Default::default()
+        },
+    )]
+    fn test_parse_file(#[case] input: TestInput) {
+        let mut reader = {
+            let file = File::open(Path::new(input.input_file.as_str()));
+            assert!(file.is_ok());
+            BufReader::new(file.unwrap())
+        };
+        let res = parse(&mut reader, input.class_name_only);
+        assert!(res.is_ok());
+    }
+
+    #[rstest]
+    #[case::it_accepts_a_buffer_as_input(
+        TestInput {
+            input_buffer: Cursor::new(r#"{"type":"ROOT", "root":"vm", "references":[]}"#.to_string().into_bytes()),
+            ..Default::default()
+        },
+    )]
+    #[case::it_accepts_a_buffer_as_input_with_class_names_only(
+        TestInput {
+            input_buffer: Cursor::new(r#"{"type":"ROOT", "root":"vm", "references":[]}"#.to_string().into_bytes()),
+            class_name_only: true,
+            ..Default::default()
+        },
+    )]
+    fn test_parse_buffer(#[case] mut input: TestInput) {
+        let res = parse(&mut input.input_buffer, input.class_name_only);
+        assert!(res.is_ok());
+    }
 }

@@ -9,6 +9,9 @@ license = "Apache-2.0"
 [lib]
 proc-macro = true
 
+[features]
+timed = []
+
 [dependencies]
 syn = {version = "0.15.15", features = ["full"]}
 quote = "0.6.9"
