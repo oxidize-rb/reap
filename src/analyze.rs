@@ -4,6 +4,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::Dfs;
 use petgraph::Graph;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fmt::Write;
 use std::iter::Iterator;
 use timed_function::timed;
@@ -36,31 +37,52 @@ pub struct Analysis {
     class_name_only: bool,
 }
 
+type AnalysisResultType = (Index, ReferenceGraph, Vec<Object>, HashMap<Index, Index>);
+
+#[derive(Debug)]
+pub enum AnalysisError {
+    NodeCountMismatch,
+    DominatorAddrLengthExceeded,
+    // Other potential error types can be added here
+}
+
+impl fmt::Display for AnalysisError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AnalysisError::NodeCountMismatch => write!(f, "Node count mismatch"),
+            AnalysisError::DominatorAddrLengthExceeded => {
+                write!(f, "Dominator addr length exceeded")
+            } // Add other variants as needed
+        }
+    }
+}
+impl std::error::Error for AnalysisError {}
+
 #[timed]
 pub fn analyze(
     orig_root: Index,
     subgraph_root: Index,
     graph: ReferenceGraph,
     class_name_only: bool,
-) -> Analysis {
+) -> Result<Analysis, AnalysisError> {
     let dominators = find_dominators(orig_root, &graph);
 
     let (root, dominated_subgraph, rest, dominators) = if subgraph_root == orig_root {
-        remove_unreachable(orig_root, &graph, &dominators)
+        remove_unreachable(orig_root, &graph, &dominators)?
     } else {
-        extract_dominated_subgraph(subgraph_root, &graph, &dominators)
+        extract_dominated_subgraph(subgraph_root, &graph, &dominators)?
     };
 
     let subtree_sizes = dominator_subtree_sizes(&dominated_subgraph, &dominators);
 
-    Analysis {
+    Ok(Analysis {
         root,
         dominated_subgraph,
         rest,
         dominators,
         subtree_sizes,
         class_name_only,
-    }
+    })
 }
 
 #[timed]
@@ -83,7 +105,7 @@ fn remove_unreachable(
     root: Index,
     graph: &ReferenceGraph,
     dominators: &HashMap<Index, Index>,
-) -> (Index, ReferenceGraph, Vec<Object>, HashMap<Index, Index>) {
+) -> Result<AnalysisResultType, AnalysisError> {
     // We take advantage of the fact that all reachable nodes have a dominator
     // to traverse the graph just once while both sorting reachable/unreachable
     // and translating domination edges into address terms
@@ -109,19 +131,17 @@ fn remove_unreachable(
         (reachable, unreachable, dominator_addrs)
     };
 
-    // Cheap sanity checks
-    assert_eq!(
-        reachable.node_count() + unreachable.len(),
-        graph.node_count()
-    );
-    assert!(dominator_addrs.len() <= reachable.node_count());
-
     // Prove that our optimization above does not change results vs checking reachability
     // separately
-    debug_assert!(reachable.node_count() == find_reachable_indices(root, graph).len());
+    if reachable.node_count() + unreachable.len() != graph.node_count() {
+        return Err(AnalysisError::NodeCountMismatch);
+    }
+    if dominator_addrs.len() > reachable.node_count() {
+        return Err(AnalysisError::DominatorAddrLengthExceeded);
+    }
 
     let (root, dominators) = map_indices(&reachable, &dominator_addrs, graph[root].address);
-    (root, reachable, unreachable, dominators)
+    Ok((root, reachable, unreachable, dominators))
 }
 
 #[timed]
@@ -129,7 +149,7 @@ fn extract_dominated_subgraph(
     root: Index,
     graph: &ReferenceGraph,
     dominators: &HashMap<Index, Index>,
-) -> (Index, ReferenceGraph, Vec<Object>, HashMap<Index, Index>) {
+) -> Result<AnalysisResultType, AnalysisError> {
     let reachable = find_reachable_indices(root, graph);
     let dominator_addrs = find_addrs_of_filtered_edges(root, &reachable, dominators, graph);
 
@@ -153,13 +173,15 @@ fn extract_dominated_subgraph(
         (dominated, not_dominated)
     };
 
-    // Cheap sanity checks
-    assert!(reachable.len() <= graph.node_count());
-    assert!(dominator_addrs.len() <= graph.node_count());
-    assert!(dominator_addrs.len() <= dominators.len());
-    assert!(dominator_addrs.len() <= reachable.len());
-    assert_eq!(dominated.node_count() + rest.len(), reachable.len());
-    assert!(dominated.node_count() <= dominator_addrs.len() + 1);
+    if reachable.len() > graph.node_count()
+        || dominator_addrs.len() > graph.node_count()
+        || dominator_addrs.len() > dominators.len()
+        || dominator_addrs.len() > reachable.len()
+        || dominated.node_count() + rest.len() != reachable.len()
+        || dominated.node_count() > dominator_addrs.len() + 1
+    {
+        return Err(AnalysisError::NodeCountMismatch);
+    }
 
     // Prove that the optimization of passing the reachable set to `find_addrs_of_filtered_edges`
     // does not change results
@@ -170,7 +192,7 @@ fn extract_dominated_subgraph(
     );
 
     let (root, dominators) = map_indices(&dominated, &dominator_addrs, graph[root].address);
-    (root, dominated, rest, dominators)
+    Ok((root, dominated, rest, dominators))
 }
 
 #[timed]
@@ -250,9 +272,9 @@ fn map_indices(
     let mapped_edges = {
         let mut mapped_edges: HashMap<Index, Index> = HashMap::new();
         for (a, d) in addr_edges {
-            let i = index_by_addr[a];
-            let j = index_by_addr[d];
-            mapped_edges.insert(i, j);
+            if let (Some(i), Some(j)) = (index_by_addr.get(a), index_by_addr.get(d)) {
+                mapped_edges.insert(*i, *j);
+            }
         }
         mapped_edges
     };
@@ -299,7 +321,7 @@ fn largest_and_rest<'a, K, I: Iterator<Item = (&'a K, Stats)>>(
 ) -> (Vec<(&'a K, Stats)>, Stats) {
     let sorted = {
         let mut vec: Vec<(&'a K, Stats)> = iter.collect();
-        vec.sort_unstable_by_key(|(_, c)| usize::max_value() - c.bytes);
+        vec.sort_unstable_by_key(|(_, c)| usize::MAX - c.bytes);
         vec
     };
 
@@ -382,7 +404,7 @@ impl Analysis {
     // Produces valid input for inferno::flamegraph::from_lines
     //
     // The basic idea is that we treat every reachable byte as a sample.
-    pub fn flamegraph_lines(&self) -> Vec<String> {
+    pub fn flamegraph_lines(&self) -> Result<Vec<String>, std::fmt::Error> {
         let mut lines = Vec::with_capacity(self.dominated_subgraph.node_count());
 
         // Re-usable buffer
@@ -402,19 +424,18 @@ impl Analysis {
                     line,
                     "{}",
                     self.dominated_subgraph[*d].format(self.class_name_only)
-                )
-                .unwrap();
+                )?;
                 line.push(';');
             }
             ancestors.clear();
 
-            write!(line, "{}", node.format(self.class_name_only)).unwrap();
+            write!(line, "{}", node.format(self.class_name_only))?;
             line.push(' ');
-            write!(line, "{}", node.bytes).unwrap();
+            write!(line, "{}", node.bytes)?;
 
             lines.push(line);
         }
 
-        lines
+        Ok(lines)
     }
 }

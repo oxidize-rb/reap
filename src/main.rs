@@ -80,7 +80,7 @@ fn parse(
     file: &Path,
     rooted_at: Option<usize>,
     class_name_only: bool,
-) -> std::io::Result<analyze::Analysis> {
+) -> Result<analyze::Analysis> {
     let file = File::open(file)?;
     let mut reader = BufReader::new(file);
     let (root, graph) = parse::parse(&mut reader, class_name_only)?;
@@ -90,16 +90,19 @@ fn parse(
             graph
                 .node_indices()
                 .find(|i| graph[*i].address == address)
-                .expect("Given subtree root address not found")
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Given subtree root address not found",
+                    )
+                })
         })
-        .unwrap_or(root);
+        .unwrap_or(Ok(root))?;
 
-    Ok(analyze::analyze(
-        root,
-        subgraph_root,
-        graph,
-        class_name_only,
-    ))
+    Ok(
+        analyze::analyze(root, subgraph_root, graph, class_name_only)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+    )
 }
 
 #[derive(StructOpt, Debug)]
@@ -179,13 +182,13 @@ fn main() -> Result<()> {
     }
 
     if let Some(output) = opt.flamegraph {
-        let lines = analysis.flamegraph_lines();
+        let lines = analysis.flamegraph_lines()?;
         write_flamegraph(&lines, output.as_path())?;
         println!("\nWrote {} nodes to {}", lines.len(), output.display());
     }
 
     if let Some(output) = opt.folded {
-        let lines = analysis.flamegraph_lines();
+        let lines = analysis.flamegraph_lines()?;
         write_folded(&lines, output.as_path())?;
         println!("\nWrote {} nodes to {}", lines.len(), output.display());
     }
@@ -287,6 +290,8 @@ mod test {
     fn flamegraph_lines_output(#[case] class_name_only: bool) {
         let analysis = parse(Path::new("test/heap.json"), None, class_name_only).unwrap();
         let frame_lines = analysis.flamegraph_lines();
+        assert!(frame_lines.is_ok());
+        let frame_lines = frame_lines.unwrap();
         let lines_with_memory_addresses = frame_lines.iter().filter(|&l| l.contains("0x")).count();
         if class_name_only {
             assert_eq!(lines_with_memory_addresses, 125);
