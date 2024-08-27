@@ -221,9 +221,9 @@ mod test {
         assert_eq!(15472, totals.count);
         assert_eq!(3439119, totals.bytes);
 
-        let (live_by_kind, _) = analysis.live_stats_by_kind(usize::max_value());
-        let (dead_by_kind, _) = analysis.unreachable_stats_by_kind(usize::max_value());
-        let (retained_by_kind, _) = analysis.retained_stats_by_kind(usize::max_value());
+        let (live_by_kind, _) = analysis.live_stats_by_kind(usize::MAX);
+        let (dead_by_kind, _) = analysis.unreachable_stats_by_kind(usize::MAX);
+        let (retained_by_kind, _) = analysis.retained_stats_by_kind(usize::MAX);
 
         let live_strs = live_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
         let dead_strs = dead_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
@@ -260,9 +260,9 @@ mod test {
         assert_eq!(25, totals.count);
         assert_eq!(1053052, totals.bytes);
 
-        let (live_by_kind, _) = analysis.live_stats_by_kind(usize::max_value());
-        let (dead_by_kind, _) = analysis.unreachable_stats_by_kind(usize::max_value());
-        let (retained_by_kind, _) = analysis.retained_stats_by_kind(usize::max_value());
+        let (live_by_kind, _) = analysis.live_stats_by_kind(usize::MAX);
+        let (dead_by_kind, _) = analysis.unreachable_stats_by_kind(usize::MAX);
+        let (retained_by_kind, _) = analysis.retained_stats_by_kind(usize::MAX);
 
         let live_strs = live_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;
         let dead_strs = dead_by_kind.iter().find(|(k, _)| *k == "String").unwrap().1;

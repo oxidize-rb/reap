@@ -24,37 +24,36 @@ pub fn timed(_: TokenStream, item: TokenStream) -> TokenStream {
     use syn::{parse_macro_input, FnArg, ItemFn};
 
     let input = parse_macro_input!(item as ItemFn);
+    let sig = &input.sig;
 
-    if input.decl.generics.where_clause.is_some() {
+    if sig.generics.where_clause.is_some() {
         panic!("#[timed()] does not work with where clauses")
     }
 
     let mut args = vec![];
-    for arg in input.decl.inputs.iter() {
+    for arg in sig.inputs.iter() {
         match *arg {
-            FnArg::Captured(ref cap) => {
-                let ty = &cap.ty;
-                let pat = &cap.pat;
-                args.push(quote!(#pat: #ty));
+            FnArg::Typed(ref pat) => {
+                args.push(quote!(#pat));
             }
             _ => panic!(),
         }
     }
 
-    let funcname = &input.ident;
-    let generics = &input.decl.generics;
+    let funcname = &sig.ident;
+    let generics = &sig.generics;
     let attributes = &input.attrs;
     let vis = &input.vis;
-    let constness = &input.constness;
-    let unsafety = &input.unsafety;
-    let abi = &input.abi;
-    let output = &input.decl.output;
+    let constness = &sig.constness;
+    let unsafety = &sig.unsafety;
+    let abi = &sig.abi;
+    let output = &sig.output;
     let body = &input.block;
     let label = funcname.to_string();
 
     quote!(
         #(#attributes),*
-        #vis #constness #unsafety #abi fn #funcname#generics (#(#args),*) #output {
+        #vis #constness #unsafety #abi fn #funcname #generics (#(#args),*) #output {
             use std::time::{Duration, Instant};
 
             let start = Instant::now();

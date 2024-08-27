@@ -13,5 +13,5 @@ proc-macro = true
 timed = []
 
 [dependencies]
-syn = {version = "0.15.15", features = ["full"]}
-quote = "0.6.9"
+syn = {version = "2.0", features = ["full"]}
+quote = "1.0"
